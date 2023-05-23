@@ -23,7 +23,8 @@ The compression algorithm revolves around using Huffman coding on the language t
 - Strings are stored in a global string table, which is simply a concatenation of all strings in the file in binary (i.e. not quoted) form. This table is DEFLATEd when stored in the file. Strings are coded with a special ":string" token code, and then the length of the string in the table using the same number format for integers.
 
 A Luz file consists of the following parts:
-- Magic number (5 bytes): Currently `\eLuzQ`, but the `Q` may change in the future for newer versions.
+- Magic number (4 bytes): `\eLuz`
+- Version (1 byte): Currently `Q`, but this may change with alternate tree structures.
 - String table (DEFLATE block): The concatenation of all string constants (that aren't in the static tree), DEFLATEd. The end of the block is padded to the next byte.
 - Number of identifiers (VarUInt): The number of extra identifiers in the identifier tree.
 - Identifier list (list of 6-bit strings): Each identifier in the tree is stored as a "Base64-decoded" string, where each character in the identifier is encoded using 6 bits according to the Base64 standard, but with character 62 being `_`, and character 63 being the stop character.
@@ -42,10 +43,14 @@ A Luz file consists of the following parts:
 - Original source: 380,108 bytes
 - Minified source (luamin): 231,149 bytes (-39.2%)
 - Original, Luz-compressed: 82,321 bytes (**-78.3%**)
+  - Decompressed: 259,416 bytes
 - Minified, Luz-compressed: 83,905 bytes (**-77.9%**)
+  - Decompressed: 230,943 bytes
 
 ### [LibDeflate](https://github.com/SafeteeWow/LibDeflate)
 - Original source: 129,887 bytes
 - Minified source (luamin): 33,381 bytes (-74.3%)
 - Original, Luz-compressed: 19,012 bytes (**-85.4%**)
+  - Decompressed: 62,811 bytes
 - Minified, Luz-compressed: 16,912 bytes (**-87.0%**)
+  - Decompressed: 33,373 bytes

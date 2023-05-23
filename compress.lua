@@ -36,6 +36,7 @@ local function number(out, num)
         m = round((math.abs(m) - 0.5) * 0x20000000000000)
         if m > 0xFFFFFFFFFFFFF then e = e + 1 end
         out((num < 0 and 6 or 4) + (e < 0 and 1 or 0), 3)
+        e = math.abs(e)
         local nibbles = {}
         while e > 7 do nibbles[#nibbles+1], e = e % 8, math.floor(e / 8) end
         nibbles[#nibbles+1] = e % 8
@@ -63,7 +64,7 @@ local function compress(tokens)
     -- write string-related data
     local out = bitstream()
     out.data = "\27LuzQ" .. LibDeflate:CompressDeflate(stringtable)
-    print(#namelist)
+    --print(#namelist)
     varint(out, #namelist)
     for _, v in ipairs(namelist) do
         for c in v[1]:gmatch "." do out(b64lut[c], 6) end

@@ -216,7 +216,7 @@ local function varint(stream)
     local num = 0
     repeat
         local n = getBitsR(stream, 8)
-        num = lshift(num, 7) + band(n, 0x7F)
+        num = num * 128 + n % 128
     until n < 128
     return num
 end
@@ -255,7 +255,7 @@ local function decompress(data)
     end
     local stringtable = concat(buffer)
     local stringpos = 1
-    if self.count > 0 then flushBits(self, self.count) end
+    if self.count % 8 > 0 then flushBits(self, self.count % 8) end
     -- read identifier list
     local numident = varint(self)
     local identifiers = {}
@@ -300,7 +300,7 @@ local function decompress(data)
             tokens[#tokens+1] = node
         elseif node == ":string" then
             local len = varint(self)
-            tokens[#tokens+1] = ("%q"):format(stringtable:sub(stringpos, stringpos + len - 1)):gsub("\n", "\\n"):gsub("\t", "\\t"):gsub("[%z\1-\31\127-\255]", function(n) return ("\\%03d"):format(n:byte()) end)
+            tokens[#tokens+1] = ("%q"):format(stringtable:sub(stringpos, stringpos + len - 1)):gsub("\\?\n", "\\n"):gsub("\t", "\\t"):gsub("[%z\1-\31\127-\255]", function(n) return ("\\%03d"):format(n:byte()) end)
             stringpos = stringpos + len
         elseif node == ":number" then
             tokens[#tokens+1] = tostring(number(self))

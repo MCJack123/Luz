@@ -1,4 +1,5 @@
 local lex = require "lex"
+local lz77 = require "lz77"
 local freq = {
     ["\"\""] = 0,
     ["\"string\""] = 0,
@@ -49,6 +50,8 @@ local function scan(dir)
             if load(data) then
                 local ok, res = pcall(lex, data, 1, 2)
                 if ok then
+                    print(path, #res)
+                    res = lz77(res)
                     print(path, #res)
                     for _, v in ipairs(res) do
                         v.text = v.text:gsub("'", '"')

@@ -1,5 +1,6 @@
 local LibDeflate = require "LibDeflate"
 local maketree = require "maketree"
+local lz77 = require "lz77"
 local token_encode_map = require "token_encode_map"
 
 local b64str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
@@ -25,6 +26,7 @@ local function varint(out, num)
     while num > 127 do bytes[#bytes+1], num = num % 128, math.floor(num / 128) end
     bytes[#bytes+1] = num % 128
     for i = #bytes, 1, -1 do out(bytes[i] + (i == 1 and 0 or 128), 8) end
+    return #bytes * 8
 end
 
 local function number(out, num)
@@ -41,55 +43,130 @@ local function number(out, num)
         while e > 7 do nibbles[#nibbles+1], e = e % 8, math.floor(e / 8) end
         nibbles[#nibbles+1] = e % 8
         for i = #nibbles, 1, -1 do out(nibbles[i] + (i == 1 and 0 or 8), 4) end
-        return varint(out, m)
+        return varint(out, m) + #nibbles * 4 + 3
     end
 end
 
-local function compress(tokens)
-    local namefreq, stringtable = {}, ""
+local function nametree(out, names)
+    if not names then
+        out(0, 4)
+        return 4
+    end
+    names.maxlen = select(2, math.frexp(names.maxlen))
+    out(names.maxlen, 4)
+    local bits = 4
+    local c, n = names.lengths[1], 0
+    for _, v in ipairs(names.lengths) do
+        if v ~= c or n == 85 then
+            if n > 21 then out(3, 2) out(n - 22, 6) bits = bits + 8 + names.maxlen
+            elseif n > 5 then out(2, 2) out(n - 6, 4) bits = bits + 6 + names.maxlen
+            elseif n > 1 then out(1, 2) out(n - 2, 2) bits = bits + 4 + names.maxlen
+            else out(0, 2) bits = bits + 2 + names.maxlen end
+            out(v, names.maxlen)
+            c, n = v, 0
+        end
+        n = n + 1
+    end
+    if n > 21 then out(3, 2) out(n - 22, 6) bits = bits + 8 + names.maxlen
+    elseif n > 5 then out(2, 2) out(n - 6, 4) bits = bits + 6 + names.maxlen
+    elseif n > 1 then out(1, 2) out(n - 2, 2) bits = bits + 4 + names.maxlen
+    else out(0, 2) bits = bits + 2 + names.maxlen end
+    out(c, names.maxlen)
+    return bits
+end
+
+local function mktree(freq)
+    local names = {list = {}}
+    for k, w in pairs(freq) do names.list[#names.list+1] = {k, w} end
+    if #names.list > 0 then
+        names.map, names.lengths = maketree(names.list)
+        names.maxlen = 0
+        for _, w in ipairs(names.lengths) do names.maxlen = math.max(names.maxlen, w) end
+        return names
+    end
+    return nil
+end
+
+local function compress(tokens, maxdist)
+    local namefreq, stringtable = nil, ""
+    local curnamefreq, curnametok = {}, nil
     -- generate identifier tree and string table
     for _, v in ipairs(tokens) do
         if v.type == "name" and not token_encode_map[v.text] then
-            namefreq[v.text] = (namefreq[v.text] or 0) + 1
+            curnamefreq[v.text] = (curnamefreq[v.text] or 0) + 1
+        elseif v.type == "keyword" and v.text == "function" then
+            local names = mktree(curnamefreq)
+            if curnametok then curnametok.names = names
+            else namefreq = names end
+            curnamefreq, curnametok = {}, v
         elseif v.type == "string" and not token_encode_map[v.text] then
             v.str = load("return " .. v.text, "=string", "t", {})()
             stringtable = stringtable .. v.str
         end
     end
-    local namelist = {}
-    for k, v in pairs(namefreq) do namelist[#namelist+1] = {k, v} end
-    local namemap, namelengths, nametree = maketree(namelist)
-    local maxnamelen = 0
-    for _, v in ipairs(namelengths) do maxnamelen = math.max(maxnamelen, v) end
+    do
+        local names = mktree(curnamefreq)
+        if curnametok then curnametok.names = names
+        else namefreq = names end
+    end
+    tokens = lz77(tokens, maxdist)
+    local distfreq = {}
+    for _, v in ipairs(tokens) do if v.type:find "^repeat" then distfreq[v.dist.code] = (distfreq[v.dist.code] or 0) + 1 end end
+    local distlist = {}
+    for i = 0, 29 do distlist[i+1] = {i, distfreq[i] or 0} end
+    local dist = {}
+    dist.map, dist.lengths = maketree(distlist)
+    dist.maxlen = 0
+    for _, w in ipairs(dist.lengths) do dist.maxlen = math.max(dist.maxlen, w) end
     -- write string-related data
     local out = bitstream()
     out.data = "\27LuzQ" .. LibDeflate:CompressDeflate(stringtable)
     --print(#namelist)
-    varint(out, #namelist)
-    for _, v in ipairs(namelist) do
+    varint(out, #namefreq.list)
+    for _, v in ipairs(namefreq.list) do
         for c in v[1]:gmatch "." do out(b64lut[c], 6) end
         out(63, 6)
     end
-    maxnamelen = select(2, math.frexp(maxnamelen))
-    out(maxnamelen, 4)
-    for _, v in ipairs(namelengths) do out(v, maxnamelen) end
+    nametree(out, dist)
+    nametree(out, namefreq)
+    print(#out.data)
     -- write tokens
+    local tokenbits, namebits, stringbits, numberbits, lzbits, treebits = 0, 0, 0, 0, 0, 0
+    local namemap = namefreq.map
     for _, v in ipairs(tokens) do
         if token_encode_map[v.text] then
             out(token_encode_map[v.text].code, token_encode_map[v.text].bits)
+            tokenbits = tokenbits + token_encode_map[v.text].bits
         elseif v.type == "name" then
             out(token_encode_map[":name"].code, token_encode_map[":name"].bits)
+            tokenbits = tokenbits + token_encode_map[":name"].bits
             out(namemap[v.text].code, namemap[v.text].bits)
+            namebits = namebits + namemap[v.text].bits
         elseif v.type == "string" then
             out(token_encode_map[":string"].code, token_encode_map[":string"].bits)
-            varint(out, #v.str)
+            tokenbits = tokenbits + token_encode_map[":string"].bits
+            stringbits = stringbits + varint(out, #v.str)
         elseif v.type == "number" then
             out(token_encode_map[":number"].code, token_encode_map[":number"].bits)
-            number(out, tonumber(v.text))
+            tokenbits = tokenbits + token_encode_map[":number"].bits
+            numberbits = numberbits + number(out, tonumber(v.text))
+        elseif v.type:find "^repeat" then
+            out(token_encode_map[":" .. v.type].code, token_encode_map[":" .. v.type].bits)
+            tokenbits = tokenbits + token_encode_map[":" .. v.type].bits
+            out(v.len.extra, v.len.bits)
+            out(dist.map[v.dist.code].code, dist.map[v.dist.code].bits)
+            out(v.dist.extra, v.dist.bits)
+            lzbits = lzbits + v.len.bits + dist.map[v.dist.code].bits + v.dist.bits
         else error("Could not find encoding for token " .. v.type .. "(" .. v.text .. ")!") end
+        if v.names then
+            treebits = treebits + nametree(out, v.names)
+            namemap = v.names.map
+        end
     end
     out(token_encode_map[":end"].code, token_encode_map[":end"].bits)
     out()
+    tokenbits = tokenbits + token_encode_map[":end"].bits
+    print(tokenbits / 8, namebits / 8, stringbits / 8, numberbits / 8, lzbits / 8, treebits / 8)
     return out.data
 end
 

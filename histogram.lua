@@ -1,47 +1,11 @@
 local lex = require "lex"
-local freq = {
-    ["\"\""] = 0,
-    ["\"string\""] = 0,
-    ["\"number\""] = 0,
-    ["\"boolean\""] = 0,
-    ["\"nil\""] = 0,
-    ["\"function\""] = 0,
-    ["\"table\""] = 0,
-    ["_G"] = 0,
-    ["_ENV"] = 0,
-    ["_"] = 0,
-    ["error"] = 0,
-    ["getmetatable"] = 0,
-    ["ipairs"] = 0,
-    ["load"] = 0,
-    ["pairs"] = 0,
-    ["pcall"] = 0,
-    ["print"] = 0,
-    ["select"] = 0,
-    ["setmetatable"] = 0,
-    ["tonumber"] = 0,
-    ["tostring"] = 0,
-    ["type"] = 0,
-    ["coroutine"] = 0,
-    ["require"] = 0,
-    ["package"] = 0,
-    ["string"] = 0,
-    ["table"] = 0,
-    ["math"] = 0,
-    ["bit32"] = 0,
-    ["io"] = 0,
-    ["os"] = 0,
-    ["debug"] = 0,
-    ["0"] = 0,
-    ["1"] = 0,
-    ["2"] = 0,
-    ["-1"] = 0,
-    [":end"] = 1,
-}
+local marknames = require "marknames"
+local reduce = require "reduce"
+local freq = require "tokens"
 local function scan(dir)
     for _, p in ipairs(fs.list(dir)) do
         local path = fs.combine(dir, p)
-        if fs.isDir(path) then scan(path)
+        if fs.isDir(path) and path ~= "luz" then scan(path)
         elseif path:match "%.lua$" then
             local file = assert(fs.open(path, "r"))
             local data = file.readAll()
@@ -49,10 +13,12 @@ local function scan(dir)
             if load(data) then
                 local ok, res = pcall(lex, data, 1, 2)
                 if ok then
+                    marknames(res)
+                    res = reduce(res)
                     print(path, #res)
                     for _, v in ipairs(res) do
                         v.text = v.text:gsub("'", '"')
-                        if freq[v.text] or v.type == "keyword" or v.type == "operator" or v.type == "constant" then
+                        if freq[v.text] or v.type == "keyword" or v.type == "operator" or v.type == "constant" or v.type == "combined" then
                             freq[v.text] = (freq[v.text] or 0) + 1
                         else
                             freq[":" .. v.type] = (freq[":" .. v.type] or 0) + 1

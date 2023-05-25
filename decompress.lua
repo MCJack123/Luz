@@ -299,11 +299,20 @@ local function decompress(data)
             while type(node) == "table" do node = node[getBitsR(self, 1)+1] end
             tokens[#tokens+1] = node
         elseif node == ":string" then
-            local len = varint(self)
+            local len = getBitsR(self, 1) == 1 and varint(self) or getBitsR(self, 3)
             tokens[#tokens+1] = ("%q"):format(stringtable:sub(stringpos, stringpos + len - 1)):gsub("\\?\n", "\\n"):gsub("\t", "\\t"):gsub("[%z\1-\31\127-\255]", function(n) return ("\\%03d"):format(n:byte()) end)
             stringpos = stringpos + len
         elseif node == ":number" then
             tokens[#tokens+1] = tostring(number(self))
+        elseif node == ":append" then
+            local len = getBitsR(self, 4)+1
+            tokens[#tokens+1] = "["
+            tokens[#tokens+1] = "#"
+            for _ = 1, len do tokens[#tokens+1] = tokens[#tokens-len-1] end
+            tokens[#tokens+1] = "+"
+            tokens[#tokens+1] = "1"
+            tokens[#tokens+1] = "]"
+            tokens[#tokens+1] = "="
         else tokens[#tokens+1] = node end
     end
     -- create source

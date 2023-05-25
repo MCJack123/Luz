@@ -26,7 +26,7 @@ local function minify(tokens, upvalues, start, nextname)
         if state == 1 then -- normal
             if v.type == "keyword" then
                 retval[start] = v
-                if v.text == "do" or v.text == "then" then
+                if v.text == "do" or v.text == "then" or v.text == "repeat" then
                     local t, s = minify(tokens, locals, start + 1, nextname)
                     for i = start + 1, s do retval[i] = t[i] end
                     start = s

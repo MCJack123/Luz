@@ -1,5 +1,7 @@
 local LibDeflate = require "LibDeflate"
 local maketree = require "maketree"
+local marknames = require "marknames"
+local reduce = require "reduce"
 local token_encode_map = require "token_encode_map"
 
 local b64str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
@@ -25,6 +27,7 @@ local function varint(out, num)
     while num > 127 do bytes[#bytes+1], num = num % 128, math.floor(num / 128) end
     bytes[#bytes+1] = num % 128
     for i = #bytes, 1, -1 do out(bytes[i] + (i == 1 and 0 or 128), 8) end
+    return #bytes * 8
 end
 
 local function number(out, num)
@@ -45,51 +48,126 @@ local function number(out, num)
     end
 end
 
+local function nametree(out, data, isLocal)
+    --print(data and #data.len)
+    if not data then
+        out(0, 5)
+        return 5
+    end
+    local num
+    if isLocal then
+        if #data.len > 15 then out(#data.len + 256, 9) num = 9
+        else out(#data.len, 5) num = 5 end
+    else
+        num = varint(out, #data.len)
+    end
+    for _, v in ipairs(data.list) do
+        for c in v[1]:gmatch "." do out(b64lut[c], 6) end
+        out(63, 6)
+        num = num + #v * 6 + 6
+    end
+    out(data.maxlen, 4)
+    for _, v in ipairs(data.len) do out(v, data.maxlen) end
+    return num + #data.len * data.maxlen + 4
+end
+
 local function compress(tokens)
-    local namefreq, stringtable = {}, ""
-    -- generate identifier tree and string table
+    local names = marknames(tokens)
+    tokens = reduce(tokens)
+    local stringtable = ""
+    -- generate string table
     for _, v in ipairs(tokens) do
-        if v.type == "name" and not token_encode_map[v.text] then
-            namefreq[v.text] = (namefreq[v.text] or 0) + 1
-        elseif v.type == "string" and not token_encode_map[v.text] then
+        if v.type == "string" and not token_encode_map[v.text] then
             v.str = load("return " .. v.text, "=string", "t", {})()
             stringtable = stringtable .. v.str
         end
     end
-    local namelist = {}
-    for k, v in pairs(namefreq) do namelist[#namelist+1] = {k, v} end
-    local namemap, namelengths, nametree = maketree(namelist)
-    local maxnamelen = 0
-    for _, v in ipairs(namelengths) do maxnamelen = math.max(maxnamelen, v) end
     -- write string-related data
     local out = bitstream()
     out.data = "\27LuzQ" .. LibDeflate:CompressDeflate(stringtable)
+    local stlen = #out.data - 5
     --print(#namelist)
-    varint(out, #namelist)
-    for _, v in ipairs(namelist) do
-        for c in v[1]:gmatch "." do out(b64lut[c], 6) end
-        out(63, 6)
-    end
-    maxnamelen = select(2, math.frexp(maxnamelen))
-    out(maxnamelen, 4)
-    for _, v in ipairs(namelengths) do out(v, maxnamelen) end
+    nametree(out, names.globals, false)
+    local globallistlen = #out.data - stlen - 5
+    nametree(out, names.fields, false)
+    local fieldlistlen = #out.data - globallistlen - stlen - 5
+    nametree(out, names.locals, true)
+    local locallistlen = #out.data - fieldlistlen - globallistlen - stlen - 5
+    local namebits, strbits, funcbits = 0, 0, 0
     -- write tokens
+    local upvalues = {}
+    local localstate = {level = 1, locals = names.locals}
     for _, v in ipairs(tokens) do
-        if token_encode_map[v.text] then
+        --print(v.type, v.text)
+        if v.type == "keyword" or v.type == "combined" then
             out(token_encode_map[v.text].code, token_encode_map[v.text].bits)
-        elseif v.type == "name" then
-            out(token_encode_map[":name"].code, token_encode_map[":name"].bits)
-            out(namemap[v.text].code, namemap[v.text].bits)
+            if v.text:find "then" or v.text:find "do" then
+                localstate.level = localstate.level + 1
+                --print(localstate.level)
+            elseif v.text:find "end" or v.text:find "elseif" then
+                if v.text == "end end" then localstate.level = localstate.level - 2
+                else localstate.level = localstate.level - 1 end
+                --print(localstate.level)
+                while localstate.level <= 0 do
+                    local diff = localstate.level
+                    localstate = table.remove(upvalues, 1)
+                    localstate.level = localstate.level + diff
+                    --print("exit", #upvalues)
+                end
+            elseif v.text:find "function" then
+                --print("enter", #upvalues)
+                funcbits = funcbits + nametree(out, v.locals, true)
+                table.insert(upvalues, 1, localstate)
+                localstate = {level = 1, locals = v.locals}
+            end
+        elseif token_encode_map[v.text] then
+            out(token_encode_map[v.text].code, token_encode_map[v.text].bits)
+        elseif v.type == "global" then
+            out(token_encode_map[":global"].code, token_encode_map[":global"].bits)
+            out(names.globals.map[v.text].code, names.globals.map[v.text].bits)
+            namebits = namebits + names.globals.map[v.text].bits
+        elseif v.type == "field" then
+            out(token_encode_map[":field"].code, token_encode_map[":field"].bits)
+            out(names.fields.map[v.text].code, names.fields.map[v.text].bits)
+            namebits = namebits + names.fields.map[v.text].bits
+        elseif v.type == "local" then
+            out(token_encode_map[":local"].code, token_encode_map[":local"].bits)
+            --print(v.text, localstate.locals)
+            out(localstate.locals.map[v.text].code, localstate.locals.map[v.text].bits)
+            namebits = namebits + localstate.locals.map[v.text].bits
+        elseif v.type:match "^upvalue" then
+            out(token_encode_map[":" .. v.type].code, token_encode_map[":" .. v.type].bits)
+            local map
+            local num = v.type:match "^upvalue(%d+)"
+            if not num then
+                num = v.level
+                if num >= 20 then error("too many levels of upvalues") end
+                out(num - 4, 4)
+            end
+            --print(num, upvalues[num])
+            map = upvalues[tonumber(num)].locals.map
+            out(map[v.text].code, map[v.text].bits)
+            namebits = namebits + map[v.text].bits
         elseif v.type == "string" then
             out(token_encode_map[":string"].code, token_encode_map[":string"].bits)
-            varint(out, #v.str)
+            if #v.str < 8 then
+                out(#v.str, 4)
+                strbits = strbits + 5
+            else
+                out(1, 1)
+                strbits = strbits + varint(out, #v.str) + 1
+            end
         elseif v.type == "number" then
             out(token_encode_map[":number"].code, token_encode_map[":number"].bits)
             number(out, tonumber(v.text))
+        elseif v.type == "append" then
+            out(token_encode_map[":append"].code, token_encode_map[":append"].bits)
+            out(v.len, 4)
         else error("Could not find encoding for token " .. v.type .. "(" .. v.text .. ")!") end
     end
     out(token_encode_map[":end"].code, token_encode_map[":end"].bits)
     out()
+    print(#tokens, #stringtable, stlen, globallistlen, fieldlistlen, locallistlen, #out.data - locallistlen - fieldlistlen - globallistlen - stlen - 5, namebits / 8, strbits / 8, funcbits / 8)
     return out.data
 end
 

@@ -1,6 +1,8 @@
 # Luz
 An extremely *light* Lua compression algorithm.
 
+**The algorithm is not stable yet - I'm still working on optimizing it. Don't rely on newer versions to work on older files yet.**
+
 ## Usage
 ```
 Usage: luz [options] <input> [output]

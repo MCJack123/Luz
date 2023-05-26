@@ -16,6 +16,8 @@ Options:
 ## Format Details
 The compression algorithm revolves around using Huffman coding + LZ77 on the language tokens itself, rather than on the bytes in the source file.
 
+- The entire Lua script is passed through a Lua lexer, which splits up the file into tokens, and classifies them by the type of token.
+- All whitespace and comments are stripped to remove unnecessary data while running.
 - A static Huffman tree, computed using a large data set of Lua files, is used to code Lua keywords, operators, and commonly-used identifiers, strings and numbers. Each token in the file is stored as one code (plus extra data for identifiers/strings/numbers).
 - Other identifiers are stored in a dynamic, per-file Huffman tree, which uses canonical codes to reduce the size of the tree in the file. Identifiers are coded with a special ":name" token code, and then the code for the identifier tree.
 - Numbers are stored using one of two ways:
@@ -55,20 +57,24 @@ A Luz file consists of the following parts:
 ## Performance
 *(Early tests - these may improve over time.)*
 
+**NOTE:** "Stripped" numbers are the size of the file after compression and decompression, which strips whitespace and comments, while keeping name lengths the same.
+
 ### [Phoenix Kernel](https://phoenix.madefor.cc)
 - Original source: 380,108 bytes
+  - Stripped: 259,416 bytes
+  - Luz-compressed: 48,897 bytes (**-87.1%**)
+  - Gzip-compressed: 66,818 bytes
 - Minified source (luamin): 231,149 bytes (-39.2%)
-- Original, Luz-compressed: 48,897 bytes (**-87.1%**)
-  - Decompressed: 259,416 bytes
-- Minified, Luz-compressed: 49,476 bytes (**-87.0%**)
-  - Decompressed: 230,943 bytes
-- Minified, Gzip-compressed: 46,968 bytes
+  - Stripped: 230,943 bytes
+  - Luz-compressed: 49,476 bytes (**-78.6%**)
+  - Gzip-compressed: 46,968 bytes
 
 ### [LibDeflate](https://github.com/SafeteeWow/LibDeflate)
 - Original source: 129,887 bytes
+  - Stripped: 62,811 bytes
+  - Luz-compressed: 12,900 bytes (**-90.1%**)
+  - Gzip-compressed: 29,132 bytes
 - Minified source (luamin): 33,381 bytes (-74.3%)
-- Original, Luz-compressed: 12,900 bytes (**-90.1%**)
-  - Decompressed: 62,811 bytes
-- Minified, Luz-compressed: 12,199 bytes (**-90.6%**)
-  - Decompressed: 33,373 bytes
-- Minified, Gzip-compressed: 11,125 bytes
+  - Stripped: 33,373 bytes
+  - Luz-compressed: 12,199 bytes (**-63.5%**)
+  - Gzip-compressed: 11,125 bytes

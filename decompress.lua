@@ -12,6 +12,8 @@ local DPT = {8, 9, 7, 8}
 local STATIC_HUFFMAN = {[0] = 5, 261, 133, 389, 69, 325, 197, 453, 37, 293, 165, 421, 101, 357, 229, 485, 21, 277, 149, 405, 85, 341, 213, 469, 53, 309, 181, 437, 117, 373, 245, 501}
 local STATIC_BITS = 5
 local b64str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
+local b64lut = {}
+for i = 1, #b64str do b64lut[string.char(i-1)] = b64str:sub(i, i) end
 
 local function flushBits(stream, int)
     stream.bits = rshift(stream.bits, int)
@@ -238,40 +240,33 @@ local function number(stream)
     end
 end
 
-local function decompress(data)
-    if data:sub(1, 5) ~= "\27LuzQ" then error("invalid format", 2) end
-    -- deflate string table
-    local self = {buffer = data, position = 6, bits = 0, count = 0}
-    local output, buffer = {}, {}
-    local last, typ
-    repeat
-        last, typ = getBits(self, 1), getBits(self, 2)
-        if not last or not typ then break end
-        typ = typ == 0 and uncompressed(output, self) or typ == 1 and static(output, self) or typ == 2 and dynamic(output, self)
-    until last == 1
-    local size = #output
-    for i = 1, size, 4096 do
-        buffer[#buffer + 1] = char(unpack(output, i, min(i + 4095, size)))
-    end
-    local stringtable = concat(buffer)
-    local stringpos = 1
-    if self.count % 8 > 0 then flushBits(self, self.count % 8) end
-    -- read identifier list
-    local numident = varint(self)
-    local identifiers = {}
-    for i = 1, numident do
-        local s = ""
-        while true do
-            local n = getBitsR(self, 6)
-            if n == 63 then break end
-            s = s .. b64str:sub(n+1, n+1)
-        end
-        identifiers[i] = s
-    end
+local rlemap = {2, 6, 22, 86, 342, 1366, 5462}
+
+local function readrle(stream, len)
+    local bits = getBitsR(stream, 3)
+    if bits == 0 then return 1, getBitsR(stream, len) end
+    local rep = getBitsR(stream, bits * 2) + rlemap[bits]
+    return rep, getBitsR(stream, len)
+end
+
+local function nametree(stream, list)
     -- read identifier code lengths
-    local maxcodelen = getBitsR(self, 4)
+    local maxlen = getBitsR(stream, 4)
+    if maxlen == 0 then
+        if getBitsR(stream, 1) == 0 then return nil
+        else return varint(stream) end
+    end
     local bitlen = {}
-    for i = 1, numident do bitlen[i] = {s = identifiers[i], l = getBitsR(self, maxcodelen)} end
+    local n, c = 0
+    for i = 1, #list do
+        if n == 0 then
+            n, c = readrle(stream, maxlen)
+            --print(n, c)
+        end
+        if c > 0 then bitlen[#bitlen+1] = {s = list[i], l = c} end
+        n = n - 1
+    end
+    assert(n == 0, n)
     table.sort(bitlen, function(a, b) if a.l == b.l then return a.s < b.s else return a.l < b.l end end)
     bitlen[1].c = 0
     for j = 2, #bitlen do bitlen[j].c = bit32.lshift(bitlen[j-1].c + 1, bitlen[j].l - bitlen[j-1].l) end
@@ -288,7 +283,53 @@ local function decompress(data)
         local n = bit32.extract(c, 0, 1)
         node[n+1] = bitlen[j].s
     end
+    return codetree
+end
+
+local function decompress(data)
+    if data:sub(1, 5) ~= "\27LuzQ" then error("invalid format", 2) end
+    -- deflate string table
+    local self = {buffer = data, position = 6, bits = 0, count = 0}
+    local stringtable, identliststr
+    do
+        local output, buffer = {}, {}
+        local last, typ
+        repeat
+            last, typ = getBits(self, 1), getBits(self, 2)
+            if not last or not typ then break end
+            typ = typ == 0 and uncompressed(output, self) or typ == 1 and static(output, self) or typ == 2 and dynamic(output, self)
+        until last == 1
+        local size = #output
+        for i = 1, size, 4096 do
+            buffer[#buffer + 1] = char(unpack(output, i, min(i + 4095, size)))
+        end
+        stringtable = concat(buffer)
+        if self.count % 8 > 0 then flushBits(self, self.count % 8) end
+    end
+    -- deflate identifier list
+    do
+        local output, buffer = {}, {}
+        local last, typ
+        repeat
+            last, typ = getBits(self, 1), getBits(self, 2)
+            if not last or not typ then break end
+            typ = typ == 0 and uncompressed(output, self) or typ == 1 and static(output, self) or typ == 2 and dynamic(output, self)
+        until last == 1
+        local size = #output
+        for i = 1, size, 4096 do
+            buffer[#buffer + 1] = char(unpack(output, i, min(i + 4095, size)))
+        end
+        identliststr = concat(buffer)
+        if self.count % 8 > 0 then flushBits(self, self.count % 8) end
+    end
+    -- split identifiers
+    local identifiers = {}
+    for ident in identliststr:gmatch "([%z\1-\62]+)\63" do identifiers[#identifiers+1] = ident:gsub(".", b64lut) end
+    -- read distance & identifier code lengths
+    local disttree = nametree(self, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29})
+    local codetree = nametree(self, identifiers)
     -- read tokens
+    local stringpos = 1
     local tokens = {}
     while true do
         local node = token_decode_tree
@@ -304,6 +345,22 @@ local function decompress(data)
             stringpos = stringpos + len
         elseif node == ":number" then
             tokens[#tokens+1] = tostring(number(self))
+        elseif node:find "^:repeat" then
+            local lencode = tonumber(node:match "^:repeat(%d+)")
+            local ebits = math.max(math.floor(lencode / 2) - 1, 0)
+            if ebits > 0 then
+                local extra = getBitsR(self, ebits)
+                lencode = bit32.bor(extra, bit32.lshift(bit32.band(lencode, 1) + 2, ebits)) + 3
+            else lencode = lencode + 3 end
+            node = disttree
+            while type(node) == "table" do node = node[getBitsR(self, 1)+1] end
+            local distcode
+            ebits = math.max(math.floor(node / 2) - 1, 0)
+            if ebits > 0 then
+                local extra = getBitsR(self, ebits)
+                distcode = bit32.bor(extra, bit32.lshift(bit32.band(node, 1) + 2, ebits)) + 1
+            else distcode = node + 1 end
+            for _ = 1, lencode do tokens[#tokens+1] = tokens[#tokens-distcode+1] end
         else tokens[#tokens+1] = node end
     end
     -- create source

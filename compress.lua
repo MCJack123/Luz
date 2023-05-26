@@ -47,6 +47,51 @@ local function number(out, num)
     end
 end
 
+local function burrowsWheelerTransform(numbers)
+    -- Create a table of all rotations of the input list
+    local rotations = {}
+    local length = #numbers
+    for i = 1, length do
+        local rotation = {}
+        for j = 1, length do
+            rotation[j] = numbers[(i + j - 2) % length + 1]
+        end
+        rotations[i] = rotation
+    end
+
+    -- Sort the rotations lexicographically
+    table.sort(rotations, function(a, b)
+        for i = 1, length do
+            if a[i] ~= b[i] then
+                return a[i] < b[i]
+            end
+        end
+        return false
+    end)
+
+    -- Extract the last column of the sorted rotations
+    local transformed = {}
+    for i = 1, length do
+        transformed[i] = rotations[i][length]
+    end
+
+    return transformed
+end
+
+local function moveToFront(numbers, range)
+    local dict = {}
+    for i = 0, range do dict[i] = i end
+    local retval = {}
+    local rank = 0
+    for n, v in ipairs(numbers) do
+        for i = 0, range do if dict[i] == v then rank = i break end end
+        retval[n] = rank
+        for i = rank, 1, -1 do dict[i] = dict[i-1] end
+        dict[0] = v
+    end
+    return retval
+end
+
 local function nametree(out, names)
     --print(textutils.serialize(names, {compact = true}))
     if not names then
@@ -56,12 +101,24 @@ local function nametree(out, names)
         out(1, 5)
         return varint(out, names.idx - 1) + 5
     end
+    --[=[
+    names.lengths[#names.lengths+1] = -1
+    local lengths = burrowsWheelerTransform(names.lengths)
+    for i = 1, #lengths do lengths[i] = lengths[i] + 1 end
+    lengths = moveToFront(lengths, names.maxlen+1)
+    names.maxlen = select(2, math.frexp(names.maxlen+1))
+    --[[]=]
+    local lengths = names.lengths
+    --local lengths = moveToFront(names.lengths, names.maxlen)
     names.maxlen = select(2, math.frexp(names.maxlen))
+    --]]
     out(names.maxlen, 4)
     local bits = 4
-    local c, n = names.lengths[1], 0
-    for _, v in ipairs(names.lengths) do
+    local c, n = lengths[1], 0
+    local num, nonzero = 1, 0
+    for _, v in ipairs(lengths) do
         if v ~= c or n == 21845 then
+            --print(n, c)
             if n > 5461 then out(7, 3) out(n - 5462, 14) bits = bits + 17 + names.maxlen
             elseif n > 1365 then out(6, 3) out(n - 1366, 12) bits = bits + 15 + names.maxlen
             elseif n > 341 then out(5, 3) out(n - 342, 10) bits = bits + 13 + names.maxlen
@@ -70,16 +127,25 @@ local function nametree(out, names)
             elseif n > 5 then out(2, 3) out(n - 6, 4) bits = bits + 7 + names.maxlen
             elseif n > 1 then out(1, 3) out(n - 2, 2) bits = bits + 5 + names.maxlen
             else out(0, 3) bits = bits + 3 + names.maxlen end
-            out(v, names.maxlen)
+            out(c, names.maxlen)
             c, n = v, 0
+            num = num + 1
+            if c > 1 then nonzero = nonzero + 1 end
         end
         n = n + 1
     end
-    if n > 21 then out(3, 2) out(n - 22, 6) bits = bits + 8 + names.maxlen
-    elseif n > 5 then out(2, 2) out(n - 6, 4) bits = bits + 6 + names.maxlen
-    elseif n > 1 then out(1, 2) out(n - 2, 2) bits = bits + 4 + names.maxlen
-    else out(0, 2) bits = bits + 2 + names.maxlen end
+    --print(n, c)
+    if n > 5461 then out(7, 3) out(n - 5462, 14) bits = bits + 17 + names.maxlen
+    elseif n > 1365 then out(6, 3) out(n - 1366, 12) bits = bits + 15 + names.maxlen
+    elseif n > 341 then out(5, 3) out(n - 342, 10) bits = bits + 13 + names.maxlen
+    elseif n > 85 then out(4, 3) out(n - 86, 8) bits = bits + 11 + names.maxlen
+    elseif n > 21 then out(3, 3) out(n - 22, 6) bits = bits + 9 + names.maxlen
+    elseif n > 5 then out(2, 3) out(n - 6, 4) bits = bits + 7 + names.maxlen
+    elseif n > 1 then out(1, 3) out(n - 2, 2) bits = bits + 5 + names.maxlen
+    else out(0, 3) bits = bits + 3 + names.maxlen end
     out(c, names.maxlen)
+    if c > 1 then nonzero = nonzero + 1 end
+    --print(bits / 8, names.maxlen, num, nonzero)
     return bits
 end
 
@@ -103,12 +169,9 @@ local function compress(tokens, maxdist)
     for i, v in ipairs(tokens) do
         if v.type == "name" and not token_encode_map[v.text] then
             namefreq[v.text] = (namefreq[v.text] or 0) + 1
-        elseif v.type == "keyword" and v.text == "function" and i > lasttok + 2048 then
+        elseif v.type == "keyword" and v.text == "function" and i > lasttok + 512 then
             --if curnametok then curnametok.names = {} end
             curnametok, lasttok = v, i
-        elseif v.type == "string" and not token_encode_map[v.text] then
-            v.str = load("return " .. v.text, "=string", "t", {})()
-            stringtable = stringtable .. v.str
         end
     end
     --if curnametok then curnametok.names = {} end
@@ -133,6 +196,9 @@ local function compress(tokens, maxdist)
     for i, v in ipairs(tokens) do
         if v.type == "name" and not token_encode_map[v.text] then
             curnamefreq[v.text] = (curnamefreq[v.text] or 0) + 1
+        elseif v.type == "string" and not token_encode_map[v.text] then
+            v.str = load("return " .. v.text, "=string", "t", {})()
+            stringtable = stringtable .. v.str
         elseif v.names then
             local names = mktree(curnamefreq, namelist)
             if curnametok then curnametok.names = names
@@ -151,7 +217,7 @@ local function compress(tokens, maxdist)
     local strtblsize = #out.data - 5
     --print(#namelist)
     -- build and compress identifier list
-    varint(out, #namelist)
+    --varint(out, #namelist)
     local identstr = ""
     for _, v in ipairs(namelist) do
         for c in v[1]:gmatch "." do
@@ -160,18 +226,18 @@ local function compress(tokens, maxdist)
         identstr = identstr .. "\63"
     end
     local identdflt = LibDeflate:CompressDeflate(identstr)
-    out()
+    --out()
     out.data = out.data .. identdflt
     local identlistsize = #out.data - strtblsize - 5
     -- write distance and initial identifier tree
     nametree(out, dist)
     nametree(out, _nametree)
     --nametree(out, namefreq)
-    print(strtblsize, identlistsize, #out.data - identlistsize - strtblsize - 5)
+    print(strtblsize, identlistsize, #out.data - identlistsize - strtblsize - 5, #namelist)
     -- write tokens
     local tokenbits, namebits, stringbits, numberbits, lzbits, treebits, numlz = 0, 0, 0, 0, 0, 0, 0
     -- local namemap = namefreq and namefreq.map
-    local namemap = namefreq and namefreq.map
+    local namemap = _nametree.map
     for _, v in ipairs(tokens) do
         if token_encode_map[v.text] then
             out(token_encode_map[v.text].code, token_encode_map[v.text].bits)
@@ -204,7 +270,7 @@ local function compress(tokens, maxdist)
         else error("Could not find encoding for token " .. v.type .. "(" .. v.text .. ")!") end
         if v.names then
             local b = nametree(out, v.names)
-            print(b / 8)
+            --print(b / 8)
             treebits = treebits + b
             namemap = v.names and v.names.map
         end

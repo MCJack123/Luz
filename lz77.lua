@@ -10,7 +10,7 @@ local function lz77(tokens, maxdist)
     local retval = {}
     local lookback = {}
     local i = 1
-    while i < #tokens do
+    while i <= #tokens do
         local v = tokens[i]
         if not v.names and lookback[v.type] and lookback[v.type][v.text] then
             local lblist = lookback[v.type][v.text]
@@ -34,7 +34,7 @@ local function lz77(tokens, maxdist)
                     lookback[v.type][v.text][#lookback[v.type][v.text]+1] = i+j
                 end
                 if tokens[i+max].names then retval[#retval].names = tokens[i+max].names end
-                i = i + max
+                i = i + max + 1
                 v = nil
             end
         end

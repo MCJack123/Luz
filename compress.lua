@@ -93,8 +93,7 @@ local function moveToFront(numbers, range)
 end
 
 local function nametree(out, names)
-    --print(textutils.serialize(names, {compact = true}))
-    if not names then
+    if not names or next(names) == nil then
         out(0, 5)
         return 5
     elseif names.idx then
@@ -162,7 +161,8 @@ local function mktree(freq, namelist)
     return names
 end
 
-local function compress(tokens, maxdist)
+local function compress(tokens, level)
+    local maxdist = level and (level == 0 and 0 or 2^(level+6))
     local namefreq, stringtable = {}, ""
     local curnamefreq, curnametok, lasttok = {}, nil, 1
     -- generate string table and prepare identifier list
@@ -213,7 +213,7 @@ local function compress(tokens, maxdist)
     end
     -- write string-related data
     local out = bitstream()
-    out.data = "\27LuzQ" .. LibDeflate:CompressDeflate(stringtable)
+    out.data = "\27LuzQ" .. LibDeflate:CompressDeflate(stringtable, {level = level})
     local strtblsize = #out.data - 5
     --print(#namelist)
     -- build and compress identifier list
@@ -225,7 +225,7 @@ local function compress(tokens, maxdist)
         end
         identstr = identstr .. "\63"
     end
-    local identdflt = LibDeflate:CompressDeflate(identstr)
+    local identdflt = LibDeflate:CompressDeflate(identstr, {level = level})
     --out()
     out.data = out.data .. identdflt
     local identlistsize = #out.data - strtblsize - 5

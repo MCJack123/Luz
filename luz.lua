@@ -8,7 +8,7 @@ local function printUsage()
 Options:
   -c       Force compression
   -d       Force decompression
-  -l <num> Compression level (0-15)
+  -l <num> Compression level (0-9)
   -m       Minify before compression (experimental)
   -r       Run compressed file
   --help   Show this help
@@ -21,7 +21,7 @@ local min = false
 local nextArg
 for _, arg in ipairs{...} do
     if nextArg then
-        if nextArg == 1 then level = 2^tonumber(arg) end
+        if nextArg == 1 then level = tonumber(arg) end
         nextArg = nil
     elseif arg:sub(1, 2) == "--" then
         if arg == "--help" then return printUsage() end

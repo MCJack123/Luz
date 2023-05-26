@@ -7,7 +7,7 @@ Usage: luz [options] <input> [output]
 Options:
   -c       Force compression
   -d       Force decompression
-  -l <num> Compression level (0-15)
+  -l <num> Compression level (0-9)
   -m       Minify before compression (experimental)
   -r       Run compressed file
   --help   Show this help
@@ -68,6 +68,23 @@ A Luz file consists of the following parts:
   - Stripped: 230,943 bytes
   - Luz-compressed: 49,476 bytes (**-78.6%**)
   - Gzip-compressed: 46,968 bytes
+
+<details>
+<summary>Compression levels (original source)</summary>
+
+| Level | Size   |
+|------:|:-------|
+|   0   | 106190 |
+|   1   | 60402  |
+|   2   | 54985  |
+|   3   | 51398  |
+|   4   | 48983  |
+|   5   | 47483  |
+|   6   | 46769  |
+|   7   | 45485  |
+|   8   | 45364  |
+|   9   | 45022  |
+</details>
 
 ### [LibDeflate](https://github.com/SafeteeWow/LibDeflate)
 - Original source: 129,887 bytes

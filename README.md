@@ -31,15 +31,16 @@ A Luz file consists of the following parts:
 - Number of identifiers (VarUInt): The number of extra identifiers in the identifier tree.
 - Identifier list (list of 6-bit strings): Each identifier in the tree is stored as a "Base64-decoded" string, where each character in the identifier is encoded using 6 bits according to the Base64 standard, but with character 62 being `_`, and character 63 being the stop character.
 - Distance tree code length size (4 bits): The number of bits in each code length in the following list.
+  - If this value is 0, an additional bit follows, indicating how many entries there are in the tree (0/1). If 1, a VarUInt with the index follows. In both cases, the length list does not exist.
 - Distance tree code lengths (RLE, 30 codes of *size* bits): A run-length encoded list of code lengths using canonical Huffman codes, coded 0-29, with each entry having a length code the specified format, followed by the code length itself:
   - For 1 repetition: bits 00
   - For 2-5 repetitions: bits 01 + (*n* - 2) in 2 bits
   - For 6-21 repetitions: bits 10 + (*n* - 6) in 4 bits
   - For 22-85 repetitions: bits 11 + (*n* - 22) in 6 bits
-- Identifier tree code length size (4 bits): The number of bits in each code length in the following list. If this is 0, there is no tree (i.e. no identifiers used in this chunk).
+- Identifier tree code length size (4 bits): The number of bits in each code length in the following list. See above for the caveats if this value is 0.
 - Identifier tree code lengths (RLE, *n* codes of *size* bits): An RLE'd list of lengths of each entry in the identifier list, using the same format as the distance tree. This tree is only used until the next tree is read.
 - Token list (list of Huffman codes): A series of Huffman codes storing the Lua tokens (or LZ77 repetitions) in the file. These decode using the tables supplied in the `token_*.lua` files. Certain tokens have extra data after:
-  - `:name`: The code is followed by another Huffman code indexing the identifier tree, which specifies which identifier to use.
+  - `:name`: The code is followed by another Huffman code indexing the identifier tree, which specifies which identifier to use. If the identifier tree only has one entry, no bits follow.
   - `:string`: The code is followed by a VarUInt specifying the length of the string. The decoder should read that many characters from the string table at the current position, and advance the read position forward to the end of the run.
   - `:number`: The code is followed by a number encoded as specified above.
   - `function`: The code is followed by a new identifier tree, which is in the same format as the initial tree listed above.

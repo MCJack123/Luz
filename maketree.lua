@@ -14,10 +14,18 @@ end
 
 -- takes a list of {symbol, weight} entries
 -- returns a key-value map of symbol to {bits: number, code: number}, the names and lengths of each code in the input order, and a decoding tree (1-indexed!)
+-- if there are 0 entries, returns nil
+-- if there is 1 entry, returns false + the index of the identifier
 local function maketree(histogram)
     -- make initial tree
     local queue = {}
-    for i, v in ipairs(histogram) do queue[i] = {data = v[1], weight = v[2]} end
+    for i, v in ipairs(histogram) do if v[2] > 0 then queue[#queue+1] = {data = v[1], weight = v[2]} end end
+    if #queue == 0 then
+        return nil
+    elseif #queue == 1 then
+        for i, v in ipairs(histogram) do if v[1] == queue[1].data then return false, i end end
+        return nil
+    end
     table.sort(queue, leafcomp)
     while #queue > 1 do
         local a, b = queue[#queue-1], queue[#queue]
@@ -33,18 +41,22 @@ local function maketree(histogram)
     codes[1].code = 0
     for i = 2, #codes do codes[i].code = bit32.lshift(codes[i-1].code + 1, codes[i].bits - codes[i-1].bits) end
     local lengths = {}
-    for i, v in ipairs(histogram) do lengths[i] = map[v[1]].bits end
+    for i, v in ipairs(histogram) do lengths[i] = map[v[1]] and map[v[1]].bits or 0 end
     -- make decoding tree
     local tree = {}
     for _, v in ipairs(codes) do
-        local node = tree
-        for n = v.bits - 1, 1, -1 do
-            local dir = bit32.extract(v.code, n) + 1
-            node[dir] = node[dir] or {}
-            node = node[dir]
+        if v.bits == 1 then
+            tree[v.code + 1] = v.symbol
+        else
+            local node = tree
+            for n = v.bits - 1, 1, -1 do
+                local dir = bit32.extract(v.code, n) + 1
+                node[dir] = node[dir] or {}
+                node = node[dir]
+            end
+            local dir = bit32.extract(v.code, 0) + 1
+            node[dir] = v.symbol
         end
-        local dir = bit32.extract(v.code, 0) + 1
-        node[dir] = v.symbol
         v.symbol = nil
     end
     return map, lengths, tree

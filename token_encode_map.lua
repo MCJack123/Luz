@@ -13,7 +13,7 @@ return {
     bits = 10,
   },
   [ "*" ] = {
-    code = 490,
+    code = 492,
     bits = 9,
   },
   type = {
@@ -21,15 +21,15 @@ return {
     bits = 10,
   },
   coroutine = {
-    code = 4085,
+    code = 4086,
     bits = 12,
   },
   ipairs = {
-    code = 2035,
+    code = 2034,
     bits = 11,
   },
   getmetatable = {
-    code = 8187,
+    code = 8185,
     bits = 13,
   },
   setmetatable = {
@@ -45,19 +45,19 @@ return {
     bits = 11,
   },
   select = {
-    code = 4090,
+    code = 4089,
     bits = 12,
   },
   tonumber = {
+    code = 4090,
+    bits = 12,
+  },
+  tostring = {
     code = 4091,
     bits = 12,
   },
-  [ ".." ] = {
-    code = 232,
-    bits = 8,
-  },
   _ = {
-    code = 2032,
+    code = 2031,
     bits = 11,
   },
   pcall = {
@@ -65,40 +65,40 @@ return {
     bits = 12,
   },
   load = {
-    code = 8188,
+    code = 8187,
     bits = 13,
   },
   [ "[" ] = {
     code = 48,
     bits = 6,
   },
-  [ "%" ] = {
-    code = 999,
+  [ "/" ] = {
+    code = 1001,
     bits = 10,
   },
-  [ "^" ] = {
-    code = 2031,
+  [ ":repeat11" ] = {
+    code = 2028,
     bits = 11,
   },
-  [ "(" ] = {
-    code = 16,
-    bits = 5,
+  [ "==" ] = {
+    code = 110,
+    bits = 7,
   },
   [ ":repeat1" ] = {
-    code = 19,
+    code = 18,
     bits = 5,
   },
-  [ ":repeat0" ] = {
-    code = 6,
-    bits = 4,
-  },
-  [ ">=" ] = {
+  [ "<=" ] = {
     code = 1004,
     bits = 10,
   },
-  require = {
-    code = 2039,
-    bits = 11,
+  [ ">=" ] = {
+    code = 1005,
+    bits = 10,
+  },
+  [ "<" ] = {
+    code = 1003,
+    bits = 10,
   },
   [ "+" ] = {
     code = 106,
@@ -117,100 +117,100 @@ return {
     bits = 10,
   },
   math = {
-    code = 1007,
-    bits = 10,
-  },
-  [ "~=" ] = {
-    code = 244,
-    bits = 8,
-  },
-  [ ")" ] = {
-    code = 4,
-    bits = 4,
-  },
-  [ "#" ] = {
-    code = 230,
-    bits = 8,
-  },
-  [ "/" ] = {
-    code = 491,
-    bits = 9,
-  },
-  [ "<" ] = {
-    code = 492,
-    bits = 9,
-  },
-  [ "{" ] = {
-    code = 113,
-    bits = 7,
-  },
-  [ "\"string\"" ] = {
-    code = 2025,
+    code = 2035,
     bits = 11,
   },
-  [ ":number" ] = {
-    code = 18,
-    bits = 5,
-  },
-  [ ":repeat2" ] = {
-    code = 20,
-    bits = 5,
-  },
-  [ ":name" ] = {
-    code = 0,
-    bits = 2,
-  },
-  [ "=" ] = {
-    code = 7,
-    bits = 4,
+  [ ":repeat0" ] = {
+    code = 2,
+    bits = 3,
   },
   [ ":repeat13" ] = {
-    code = 2030,
-    bits = 11,
-  },
-  [ "\"nil\"" ] = {
-    code = 4083,
-    bits = 12,
-  },
-  [ "end" ] = {
-    code = 50,
-    bits = 6,
-  },
-  [ ":repeat3" ] = {
-    code = 46,
-    bits = 6,
-  },
-  [ "\"function\"" ] = {
-    code = 4082,
-    bits = 12,
-  },
-  bit32 = {
-    code = 2033,
-    bits = 11,
-  },
-  [ ":repeat12" ] = {
-    code = 2029,
-    bits = 11,
-  },
-  [ "}" ] = {
-    code = 114,
-    bits = 7,
-  },
-  _G = {
     code = 4084,
-    bits = 12,
-  },
-  io = {
-    code = 4087,
     bits = 12,
   },
   print = {
     code = 2038,
     bits = 11,
   },
-  [ "<=" ] = {
-    code = 1003,
-    bits = 10,
+  [ "#" ] = {
+    code = 230,
+    bits = 8,
+  },
+  [ "{" ] = {
+    code = 113,
+    bits = 7,
+  },
+  [ ":number" ] = {
+    code = 17,
+    bits = 5,
+  },
+  [ "~=" ] = {
+    code = 245,
+    bits = 8,
+  },
+  [ ":repeat9" ] = {
+    code = 493,
+    bits = 9,
+  },
+  require = {
+    code = 2039,
+    bits = 11,
+  },
+  [ ":repeat12" ] = {
+    code = 2029,
+    bits = 11,
+  },
+  [ "=" ] = {
+    code = 21,
+    bits = 5,
+  },
+  [ "function" ] = {
+    code = 111,
+    bits = 7,
+  },
+  _G = {
+    code = 4085,
+    bits = 12,
+  },
+  [ ":name" ] = {
+    code = 0,
+    bits = 2,
+  },
+  [ ":repeat2" ] = {
+    code = 19,
+    bits = 5,
+  },
+  [ ":repeat3" ] = {
+    code = 46,
+    bits = 6,
+  },
+  [ "}" ] = {
+    code = 114,
+    bits = 7,
+  },
+  [ "(" ] = {
+    code = 14,
+    bits = 5,
+  },
+  [ "^" ] = {
+    code = 2030,
+    bits = 11,
+  },
+  [ "end" ] = {
+    code = 50,
+    bits = 6,
+  },
+  io = {
+    code = 8186,
+    bits = 13,
+  },
+  [ "," ] = {
+    code = 6,
+    bits = 4,
+  },
+  [ ":repeat6" ] = {
+    code = 109,
+    bits = 7,
   },
   _ENV = {
     code = 16383,
@@ -220,45 +220,45 @@ return {
     code = 998,
     bits = 10,
   },
-  [ ":repeat9" ] = {
-    code = 1002,
-    bits = 10,
-  },
-  [ "," ] = {
-    code = 5,
-    bits = 4,
-  },
-  [ "." ] = {
-    code = 17,
-    bits = 5,
-  },
-  [ ":end" ] = {
-    code = 16382,
-    bits = 14,
+  [ "or" ] = {
+    code = 244,
+    bits = 8,
   },
   [ ":string" ] = {
-    code = 21,
+    code = 20,
     bits = 5,
   },
+  [ ">" ] = {
+    code = 494,
+    bits = 9,
+  },
+  error = {
+    code = 1006,
+    bits = 10,
+  },
+  [ "\"string\"" ] = {
+    code = 2025,
+    bits = 11,
+  },
   debug = {
-    code = 4086,
+    code = 4087,
     bits = 12,
   },
   [ "\"number\"" ] = {
     code = 2024,
     bits = 11,
   },
-  [ "1" ] = {
-    code = 107,
-    bits = 7,
+  [ "\"boolean\"" ] = {
+    code = 8184,
+    bits = 13,
   },
-  [ "2" ] = {
-    code = 234,
-    bits = 8,
+  [ "\"nil\"" ] = {
+    code = 4083,
+    bits = 12,
   },
-  [ ":repeat11" ] = {
-    code = 2028,
-    bits = 11,
+  [ "\"function\"" ] = {
+    code = 4082,
+    bits = 12,
   },
   [ "\"table\"" ] = {
     code = 2026,
@@ -268,20 +268,20 @@ return {
     code = 2027,
     bits = 11,
   },
-  [ ">" ] = {
-    code = 493,
-    bits = 9,
+  [ "2" ] = {
+    code = 234,
+    bits = 8,
   },
-  [ ":repeat6" ] = {
-    code = 109,
-    bits = 7,
+  [ ":end" ] = {
+    code = 16382,
+    bits = 14,
   },
   [ ":repeat5" ] = {
     code = 108,
     bits = 7,
   },
-  error = {
-    code = 1005,
+  [ "%" ] = {
+    code = 999,
     bits = 10,
   },
   [ "and" ] = {
@@ -289,7 +289,7 @@ return {
     bits = 8,
   },
   [ "break" ] = {
-    code = 2034,
+    code = 2033,
     bits = 11,
   },
   [ "do" ] = {
@@ -301,35 +301,35 @@ return {
     bits = 8,
   },
   [ "elseif" ] = {
-    code = 494,
-    bits = 9,
-  },
-  [ ":repeat10" ] = {
-    code = 1001,
-    bits = 10,
-  },
-  [ "false" ] = {
     code = 495,
     bits = 9,
   },
-  [ "for" ] = {
+  [ ":repeat10" ] = {
+    code = 1002,
+    bits = 10,
+  },
+  [ "false" ] = {
     code = 496,
     bits = 9,
   },
-  [ "function" ] = {
-    code = 111,
-    bits = 7,
+  [ "for" ] = {
+    code = 497,
+    bits = 9,
   },
-  [ "==" ] = {
-    code = 110,
-    bits = 7,
+  bit32 = {
+    code = 2032,
+    bits = 11,
+  },
+  [ "0" ] = {
+    code = 233,
+    bits = 8,
   },
   [ "if" ] = {
     code = 51,
     bits = 6,
   },
   [ "in" ] = {
-    code = 1006,
+    code = 1007,
     bits = 10,
   },
   [ "local" ] = {
@@ -341,16 +341,16 @@ return {
     bits = 8,
   },
   [ "not" ] = {
-    code = 497,
-    bits = 9,
-  },
-  [ "or" ] = {
     code = 243,
     bits = 8,
   },
+  [ ")" ] = {
+    code = 15,
+    bits = 5,
+  },
   [ "repeat" ] = {
-    code = 4089,
-    bits = 12,
+    code = 8189,
+    bits = 13,
   },
   [ "return" ] = {
     code = 112,
@@ -372,13 +372,13 @@ return {
     code = 1011,
     bits = 10,
   },
-  [ "0" ] = {
-    code = 233,
-    bits = 8,
+  [ "1" ] = {
+    code = 107,
+    bits = 7,
   },
-  [ "\"boolean\"" ] = {
-    code = 8186,
-    bits = 13,
+  [ "." ] = {
+    code = 16,
+    bits = 5,
   },
   [ ":" ] = {
     code = 235,
@@ -389,19 +389,19 @@ return {
     bits = 6,
   },
   package = {
-    code = 8189,
+    code = 8188,
     bits = 13,
   },
-  [ ":repeat4" ] = {
-    code = 47,
-    bits = 6,
-  },
-  tostring = {
-    code = 4092,
-    bits = 12,
+  [ ".." ] = {
+    code = 232,
+    bits = 8,
   },
   pairs = {
     code = 2037,
     bits = 11,
+  },
+  [ ":repeat4" ] = {
+    code = 47,
+    bits = 6,
   },
 }

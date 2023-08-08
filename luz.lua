@@ -53,7 +53,8 @@ if mode == 3 then
     return assert((canload and load or loadstring)(decomp, "@" .. input, "t", _ENV))((table.unpack or unpack)(args))
 elseif mode == 2 then
     output = output or (input .. ".lua")
-    local decomp = decompress(data)
+    local ok, decomp = xpcall(decompress, debug.traceback, data)
+    if not ok then error(decomp, 0) end
     file = assert(io.open(output, "w"))
     file:write(decomp)
     file:close()
@@ -62,7 +63,8 @@ else
     assert((canload and load or loadstring)(data))
     local tokens = lex(data, 1, 2)
     if min then tokens = minify(tokens) end
-    local compressed = compress(tokens, level)
+    local ok, compressed = xpcall(compress, debug.traceback, tokens, level)
+    if not ok then error(compressed, 0) end
     file = assert(io.open(output, "wb"))
     file:write(compressed)
     file:close()

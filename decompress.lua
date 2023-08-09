@@ -1,6 +1,7 @@
 local token_frequencies = require "token_frequencies"
 local name_frequencies = require "name_frequencies"
 local string_frequencies = require "string_frequencies"
+local number_frequencies = require "number_frequencies"
 
 local bit32_band, bit32_rshift, bit32_lshift, math_frexp = bit32.band, bit32.rshift, bit32.lshift, math.frexp
 local function log2(n) local _, r = math_frexp(n) return r-1 end
@@ -21,7 +22,9 @@ local rlemap = {2, 6, 22, 86, 342, 1366, 5462}
 local function makeReader(str)
     local partial, bits, pos = 0, 0, 1
     local function readbits(n)
-        if not n then return print(pos, bits, ("%02X"):format(partial % 256)) end
+        if not n then
+            return --print(pos, bits, ("%02X"):format(partial % 256))
+        end
         if n == 0 then return 0 end
         while bits < n do
             partial = bit32_lshift(partial, 8) + str:byte(pos)
@@ -202,6 +205,55 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
     return retval
 end
 
+local function varint(readbits)
+    local num = 0
+    repeat
+        local n = readbits(8)
+        num = num * 128 + n % 128
+    until n < 128
+    return num
+end
+
+local function number(readbits)
+    local type = readbits(2)
+    if type >= 2 then
+        local esign = readbits(1)
+        local e = 0
+        repeat
+            local n = readbits(4)
+            e = bit32_lshift(e, 3) + bit32_band(n, 7)
+        until n < 8
+        if esign == 1 then e = -e end
+        local m = varint(readbits) / 0x20000000000000 + 0.5
+        return math.ldexp(m, e) * (type == 2 and 1 or -1)
+    else
+        return varint(readbits) * (type == 0 and 1 or -1)
+    end
+end
+
+local function makeLs(freq)
+    local nL = 4
+    local Ls
+    repeat
+        nL = nL * 2
+        local L, total = 0, 0
+        for _, v in ipairs(freq) do L = L + nL total = total + v[2] end
+        local R = math.max(math.floor(log2(L) + 1), 1)
+        L = 2^R
+        Ls = {R = R}
+        local freqsum, sumLs = 0, 0
+        local fail = false
+        for _, p in ipairs(freq) do
+            local s, v = p[1], p[2]
+            freqsum = freqsum + v / total
+            Ls[#Ls+1] = {s, math.floor(freqsum * L + 0.5) - sumLs}
+            if Ls[#Ls][2] == 0 then fail = true end
+            sumLs = sumLs + Ls[#Ls][2]
+        end
+    until not fail
+    return Ls
+end
+
 local function decompress(data)
     if data:sub(1, 5) ~= "\27LuzA" then error("invalid format", 2) end
     local readbits = makeReader(data:sub(6))
@@ -212,17 +264,19 @@ local function decompress(data)
     local identbits = readbits(6)
     local maxident = readbits(identbits)
     readbits(1)
-    local identcodes = blockdecompress(readbits, identbits, nil, setmetatable({}, {__index = function(_, v)
+    local identfreq = {}
+    for i = 0, maxident do identfreq[#identfreq+1] = {i, 1} end
+    for i = 0, 10 do identfreq[#identfreq+1] = {":repeat" .. i, 2} end
+    for i = 11, 29 do identfreq[#identfreq+1] = {":repeat" .. i, 1} end
+    local identcodes = blockdecompress(readbits, identbits, makeLs(identfreq), setmetatable({}, {__index = function(_, v)
         if v > maxident then return ":repeat" .. (v - maxident - 1) end
         return v
     end}))
     readbits()
-    local numtab = blockdecompress(readbits, 9, nil, strlut)
+    local numtab = blockdecompress(readbits, 9, number_frequencies, strlut)
     local tokentab = blockdecompress(readbits, 7, token_frequencies, tokenlut)
     -- recombine tables
-    local identifiers, strings = {}, {}
-    local numbers = {("d"):rep(#numtab / 8):unpack(table.concat(numtab))}
-    local partial = ""
+    local identifiers, strings, numbers, partial, numdata = {}, {}, {}, "", table.concat(numtab)
     for _, v in ipairs(stringtab) do
         if v == ":end" then
             strings[#strings+1] = partial
@@ -237,8 +291,9 @@ local function decompress(data)
         else partial = partial .. v end
     end
     identifiers[0] = table.remove(identifiers, 1)
+    local numstream = makeReader(numdata)
     -- read tokens
-    local tokens, stringpos, identpos, numpos = {}, 1, 1, 1
+    local tokens, stringpos, identpos = {}, 1, 1
     for i, node in ipairs(tokentab) do
         if node == ":end" then break
         elseif node == ":name" then
@@ -249,8 +304,7 @@ local function decompress(data)
             tokens[#tokens+1] = ("%q"):format(strings[stringpos]):gsub("\\?\n", "\\n"):gsub("\t", "\\t"):gsub("[%z\1-\31\127-\255]", function(n) return ("\\%03d"):format(n:byte()) end)
             stringpos = stringpos + 1
         elseif node == ":number" then
-            tokens[#tokens+1] = tostring(numbers[numpos])
-            numpos = numpos + 1
+            tokens[#tokens+1] = tostring(number(numstream))
         else tokens[#tokens+1] = node end
     end
     -- create source

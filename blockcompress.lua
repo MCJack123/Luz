@@ -101,6 +101,7 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out)
     -- intentional bug: we don't count the size of LZ77 data here, but situations
     -- where RLE wins should not be situations where LZ77 is relevant
     -- (TODO: do a mathematical proof or something idk)
+    print("Size candidates:", rleSize, staticSize, dynSize)
     if rleSize < dynSize and rleSize < staticSize then
         -- RLE compression blocks
         repeat
@@ -114,16 +115,17 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out)
         Ls = defaultLs
     end
     repeat
-        print(#out.data, out.len)
+        --print(#out.data, out.len)
         out(start == 1 and 1 or 0, 1)
         out(1, 1)
         if Ls == defaultLs then
             out(0, 1)
+            print("Dictionary size: 0 (static)")
         else
             out(1, 1)
             ansencode.encodeDictionary(Ls, symbolMap, nBits, out)
         end
-        print("dict", #out.data, out.len)
+        --print("dict", #out.data, out.len)
         local stop = ansencode.encodeSymbols(symbols, Ls, out, start)
         -- get LZ77 data
         local distfreq = {}
@@ -174,7 +176,7 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out)
                 out(dist.lengths, 5)
             end
             -- write LZ77 codes
-            print("number of LZ:", #lzdata)
+            print("Number of LZ:", #lzdata)
             for _, v in ipairs(lzdata) do
                 out(v[2].extra, v[2].bits)
                 if dist.map then out(dist.map[v[1].code].code, dist.map[v[1].code].bits) end
@@ -182,7 +184,7 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out)
             end
         end
         start = stop
-        print(#out.data, out.len, start)
+        --print(#out.data, out.len, start)
     until start == nil
 end
 

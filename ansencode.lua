@@ -8,7 +8,7 @@ local function log2(n) local _, r = math_frexp(n) return r-1 end
 local ansencode = {}
 
 function ansencode.makeLs(freq)
-    local nL = 16
+    local nL = 4
     local Ls
     repeat
         nL = nL * 2
@@ -84,7 +84,7 @@ function ansencode.encodeSymbols(symbols, Ls, out, startPos)
     -- write out
     if out then
         out(bitcount + R, 18)
-        print("bits", bitcount + R)
+        print("Size of block:", bitcount + R)
         out(x - L, R)
         for i = #bitbuf, 1, -1 do out(bitbuf[i][1], bitbuf[i][2]) end
         return stop
@@ -113,13 +113,13 @@ function ansencode.encodeDictionary(Ls, symbolMap, nBits, out)
     if rangeSize < listSize and #ranges < 32 then
         -- encode range-based dictionary
         if not out then return rangeSize + 5 end
-        print("range")
+        print("Dictionary size:", rangeSize + 5, "(range)")
         out(1, 1)
         out(#ranges, 5)
         for _, v in ipairs(ranges) do
             out(v[1], nBits)
             out(v[2], nBits)
-            print(v[1], v[2])
+            --print(v[1], v[2])
             for i = v[1], v[2] do
                 local found = false
                 for _, p in ipairs(Ls) do if symbolMap[p[1]] == i then out(p[2], Ls.R) found = true break end end
@@ -129,6 +129,7 @@ function ansencode.encodeDictionary(Ls, symbolMap, nBits, out)
     else
         -- encode list-based dictionary
         if not out then return listSize + 5 end
+        print("Dictionary size:", listSize + 5, "(list)")
         out(0, 1)
         out(#Ls - 1, nBits)
         for _, v in ipairs(Ls) do

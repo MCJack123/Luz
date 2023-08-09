@@ -81,7 +81,7 @@ end
 local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
     local retval = {}
     repeat
-        print("loop", #retval)
+        --print("loop", #retval)
         readbits()
         if readbits(1) == 0 then
             -- decode RLE
@@ -89,7 +89,7 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
             local nEntries
             if bits == 0 then nEntries = 1
             else nEntries = readbits(bits * 2) + rlemap[bits] end
-            print(nEntries)
+            --print(nEntries)
             readbits()
             for i = 1, nEntries do
                 local n, c = readbits(4), readbits(nBits)
@@ -103,11 +103,11 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
             if readbits(1) == 1 then
                 -- dynamic dictionary
                 local R = readbits(4)
-                print(R)
+                --print(R)
                 Ls = {R = R}
                 if readbits(1) == 1 then
                     -- range-based dictionary
-                    print("range")
+                    --print("range")
                     readbits()
                     local nRange = readbits(5)
                     for i = 1, nRange do
@@ -117,7 +117,7 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
                     end
                 else
                     -- list-based dictionary
-                    print("list")
+                    --print("list")
                     local nSym = readbits(nBits) + 1
                     for i = 1, nSym do Ls[#Ls+1] = {symbolMap[readbits(nBits)], readbits(R)} end
                 end
@@ -130,7 +130,7 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
             readbits()
             local decodingTable = generateDecodeTable(Ls)
             local ansbits = readbits(18)
-            print("bits", ansbits)
+            --print("bits", ansbits)
             local ansdata = ansdecode(readbits, ansbits, decodingTable)
             -- substitute LZ77
             local codetree
@@ -185,7 +185,6 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
                     local node = codetree
                     while type(node) == "table" do node = node[readbits(1)+1] end
                     local distcode
-                    local ebits2 = ebits
                     ebits = math.max(math.floor(node / 2) - 1, 0)
                     if ebits > 0 then
                         local extra = readbits(ebits)
@@ -197,7 +196,7 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
                     retval[#retval+1] = v
                 end
             end
-            print("number of LZ:", numlz)
+            --print("number of LZ:", numlz)
         end
     until readbits(1) == 1
     return retval
@@ -243,7 +242,7 @@ local function decompress(data)
     for i, node in ipairs(tokentab) do
         if node == ":end" then break
         elseif node == ":name" then
-            if identpos < 16 then print(#tokens, identpos, identcodes[identpos], identifiers[identcodes[identpos]]) end
+            --if identpos < 16 then print(#tokens, identpos, identcodes[identpos], identifiers[identcodes[identpos]]) end
             tokens[#tokens+1] = identifiers[identcodes[identpos]]
             identpos = identpos + 1
         elseif node == ":string" then

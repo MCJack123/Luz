@@ -1,10 +1,10 @@
-local LibDeflate = require "LibDeflate"
-local maketree = require "maketree"
 local lz77 = require "lz77"
 local token_frequencies = require "token_frequencies"
 local name_frequencies = require "name_frequencies"
 local string_frequencies = require "string_frequencies"
+local number_frequencies = require "number_frequencies"
 local blockcompress = require "blockcompress"
+local ansencode = require "ansencode"
 
 local b64str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_\0"
 local b64lut = {}
@@ -54,7 +54,7 @@ local function compress(tokens, level)
         end
     end
     maxident = maxident - 1
-    print("maxident", maxident)
+    --print("maxident", maxident)
     local numberdata = ("d"):rep(#numberlist):pack(table.unpack(numberlist))
     local numtab = {}
     for i, c in numberdata:gmatch "()(.)" do numtab[i] = c end
@@ -76,18 +76,27 @@ local function compress(tokens, level)
     local out = bitstream()
     out.data = "\x1bLuzA"
     -- compress blocks
+    print("-- String table --")
     blockcompress(strtab, 9, canUseStaticString and string_frequencies or nil, strlut, out)
     local strtabsize = #out.data - 5
+    print("-- Identifier table --")
     blockcompress(identtab, 7, name_frequencies, b64lut, out)
     local identtabsize = #out.data - strtabsize - 5
     local identnbits = math.floor(math.log(maxident + 20, 2)) + 1
     out(1, 1)
     out(identnbits, 6)
     out(maxident, identnbits)
-    blockcompress(identcodes, identnbits, nil, identcodemap, out)
+    local identfreq = {}
+    for i = 0, maxident do identfreq[#identfreq+1] = {i, 1} end
+    for i = 0, 10 do identfreq[#identfreq+1] = {":repeat" .. i, 2} end
+    for i = 11, 29 do identfreq[#identfreq+1] = {":repeat" .. i, 1} end
+    print("-- Identifier codes --")
+    blockcompress(identcodes, identnbits, ansencode.makeLs(identfreq), identcodemap, out)
     local identcodesize = #out.data - identtabsize - strtabsize - 5
-    blockcompress(numtab, 9, nil, strlut, out)
+    print("-- Number list --")
+    blockcompress(numtab, 9, number_frequencies, strlut, out)
     local numtabsize = #out.data - identcodesize - identtabsize - strtabsize - 5
+    print("-- Tokens --")
     blockcompress(symbols, 7, token_frequencies, tokenlut, out)
     out(1, 1)
     out()

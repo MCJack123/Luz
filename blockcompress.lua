@@ -50,7 +50,47 @@ local function rleencode(symbols, nBits, symbolMap, out, start)
     end
 end
 
-local function blockcompress(symbols, nBits, defaultLs, symbolMap, out)
+local function huffdict(LsH, symbolMap, out)
+    local maxs = 0
+    local lengths = {}
+    for _, v in ipairs(LsH) do
+        lengths[symbolMap[v[1]]] = LsH.R - select(2, math.frexp(v[2])) + 1
+        maxs = math.max(symbolMap[v[1]], maxs)
+    end
+    local c, n = lengths[0] or 0, 0
+    local nbits = 0
+    if out then out(maxs, 12) end
+    for i = 1, maxs do
+        if c ~= (lengths[i] or 0) or n == 8 then
+            if out then
+                if n == 0 then
+                    out(0, 1)
+                else
+                    out(1, 1)
+                    out(n - 1, 3)
+                end
+                out(c, 4)
+            end
+            nbits = nbits + (n == 0 and 5 or 8)
+            c, n = (lengths[i] or 0), 0
+        else
+            n = n + 1
+        end
+    end
+    if out then
+        if n == 0 then
+            out(0, 1)
+        else
+            out(1, 1)
+            out(n - 1, 3)
+        end
+        out(c, 4)
+        print("Dictionary size:", nbits + (n == 0 and 5 or 8), "(Huffman)")
+    end
+    return nbits + (n == 0 and 5 or 8)
+end
+
+local function blockcompress(symbols, nBits, defaultLs, symbolMap, out, maxBlockSize)
     if #symbols == 0 then
         -- empty string
         out(1, 1) -- first block
@@ -89,20 +129,27 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out)
     table.sort(freqlist, function(a, b) return symbolMap[a[1]] < symbolMap[b[1]] end)
     -- get sizes for each type
     local Ls = ansencode.makeLs(freqlist)
+    local _, huffLengths = maketree(Ls, symbolMap)
+    local LsH = {}
+    local huffSum = 0
+    for i, v in ipairs(huffLengths) do assert(v > 0) LsH[i] = {Ls[i][1], 2^(Ls.R-v+1)} huffSum = huffSum + 2^(Ls.R-v+1) end
+    LsH.R = select(2, math.frexp(huffSum))-1
     local dictSize = ansencode.encodeDictionary(Ls, symbolMap, nBits)
     local _, rleSize = rleencode(symbols, nBits, symbolMap)
     local _, dynBlockSize = ansencode.encodeSymbols(symbols, Ls)
+    local _, huffBlockSize = ansencode.encodeSymbols(symbols, LsH)
     local staticSize
     if defaultLs then _, staticSize = ansencode.encodeSymbols(symbols, defaultLs)
     else staticSize = math.huge end
     local dynSize = dynBlockSize + dictSize + 1
+    local huffSize = huffBlockSize + huffdict(LsH, symbolMap)
     staticSize = staticSize + 1
     local start = 1
     -- intentional bug: we don't count the size of LZ77 data here, but situations
     -- where RLE wins should not be situations where LZ77 is relevant
     -- (TODO: do a mathematical proof or something idk)
-    print("Size candidates:", rleSize, staticSize, dynSize)
-    if rleSize < dynSize and rleSize < staticSize then
+    print("Size candidates:", rleSize, staticSize, huffSize, dynSize)
+    if rleSize < dynSize and rleSize < staticSize and rleSize < huffSize then
         -- RLE compression blocks
         repeat
             out(start == 1 and 1 or 0, 1)
@@ -110,9 +157,12 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out)
             start = rleencode(symbols, nBits, symbolMap, out, start)
         until start == nil
         return
-    elseif staticSize < dynSize and staticSize < rleSize then
+    elseif staticSize < dynSize and staticSize < rleSize and staticSize < huffSize then
         -- Static tree blocks
         Ls = defaultLs
+    elseif huffSize < rleSize and huffSize < staticSize and huffSize < dynSize then
+        -- Huffman-coded dictionary
+        Ls = LsH
     end
     repeat
         --print(#out.data, out.len)
@@ -121,12 +171,17 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out)
         if Ls == defaultLs then
             out(0, 1)
             print("Dictionary size: 0 (static)")
+        elseif Ls == LsH then
+            out(1, 1)
+            out(0, 1)
+            huffdict(Ls, symbolMap, out)
         else
+            out(1, 1)
             out(1, 1)
             ansencode.encodeDictionary(Ls, symbolMap, nBits, out)
         end
         --print("dict", #out.data, out.len)
-        local stop = ansencode.encodeSymbols(symbols, Ls, out, start)
+        local stop = ansencode.encodeSymbols(symbols, Ls, out, start, maxBlockSize)
         -- get LZ77 data
         local distfreq = {}
         local lzdata = {}
@@ -177,14 +232,16 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out)
             end
             -- write LZ77 codes
             print("Number of LZ:", #lzdata)
+            local lzbits = 0
             for _, v in ipairs(lzdata) do
+                lzbits = lzbits + v[2].bits + v[1].bits
                 out(v[2].extra, v[2].bits)
-                if dist.map then out(dist.map[v[1].code].code, dist.map[v[1].code].bits) end
+                if dist.map then out(dist.map[v[1].code].code, dist.map[v[1].code].bits) lzbits = lzbits + dist.map[v[1].code].bits end
                 out(v[1].extra, v[1].bits)
             end
+            print("LZ size:", lzbits)
         end
         start = stop
-        --print(#out.data, out.len, start)
     until start == nil
 end
 

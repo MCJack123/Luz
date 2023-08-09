@@ -9,7 +9,7 @@ local ansencode = require "ansencode"
 local b64str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_\0"
 local b64lut = {}
 for i, c in b64str:gmatch "()(.)" do b64lut[c] = i-1 end
-for i = 0, 7 do b64lut[":repeat" .. i] = i + 64 end
+for i = 0, 11 do b64lut[":repeat" .. i] = i + 64 end
 
 local strlut = setmetatable({[":end"] = 256}, {__index = function(_, c) return c:byte() end})
 for i = 0, 15 do strlut[":repeat" .. i] = i + 257 end
@@ -85,8 +85,15 @@ local function compress(tokens, level)
             number(numberstream, tonumber(v.text))
         end
     end
+    local curident = 0
+    for i, v in ipairs(identcodes) do
+        if v - curident >= -8 and v - curident <= 7 then
+            identcodes[i] = "+" .. (v - curident)
+        end
+        curident = v
+    end
     maxident = maxident - 1
-    --print("maxident", maxident)
+    print("maxident", maxident)
     numberstream()
     local numtab = {}
     for i, c in numberstream.data:gmatch "()(.)" do numtab[i] = c end
@@ -104,7 +111,8 @@ local function compress(tokens, level)
         else symbols[i] = ":" .. v.type end
     end
     local identcodemap = setmetatable({}, {__index = function(_, v) return v end})
-    for i = 0, 19 do identcodemap[":repeat" .. i] = maxident + i + 1 end
+    for i = -8, 7 do identcodemap["+" .. i] = maxident + i + 9 end
+    for i = 0, 29 do identcodemap[":repeat" .. i] = maxident + i + 17 end
     local out = bitstream()
     out.data = "\x1bLuzA"
     -- compress blocks
@@ -120,6 +128,7 @@ local function compress(tokens, level)
     out(maxident, identnbits)
     local identfreq = {}
     for i = 0, maxident do identfreq[#identfreq+1] = {i, 1} end
+    for i = -8, 7 do identfreq[#identfreq+1] = {"+" .. i, 8} end
     for i = 0, 10 do identfreq[#identfreq+1] = {":repeat" .. i, 2} end
     for i = 11, 29 do identfreq[#identfreq+1] = {":repeat" .. i, 1} end
     print("-- Identifier codes --")

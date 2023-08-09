@@ -9,7 +9,7 @@ local function log2(n) local _, r = math_frexp(n) return r-1 end
 local b64str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_\0"
 local b64lut = {}
 for i, c in b64str:gmatch "()(.)" do b64lut[i-1] = c end
-for i = 0, 7 do b64lut[i + 64] = ":repeat" .. i end
+for i = 0, 11 do b64lut[i + 64] = ":repeat" .. i end
 
 local strlut = setmetatable({[256] = ":end"}, {__index = function(_, c) return string.char(c) end})
 for i = 0, 15 do strlut[i + 257] = ":repeat" .. i end
@@ -106,23 +106,46 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
             if readbits(1) == 1 then
                 -- dynamic dictionary
                 local R = readbits(4)
+                local maxL = readbits(4)
                 --print(R)
                 Ls = {R = R}
                 if readbits(1) == 1 then
-                    -- range-based dictionary
-                    --print("range")
-                    readbits()
-                    local nRange = readbits(5)
-                    for i = 1, nRange do
-                        local low, high = readbits(nBits), readbits(nBits)
-                        --print(low, high)
-                        for j = low, high do Ls[#Ls+1] = {symbolMap[j], readbits(R)} end
+                    -- ANS dictionary
+                    if readbits(1) == 1 then
+                        -- range-based dictionary
+                        --print("range")
+                        readbits()
+                        local nRange = readbits(5)
+                        for i = 1, nRange do
+                            local low, high = readbits(nBits), readbits(nBits)
+                            --print(low, high)
+                            for j = low, high do Ls[#Ls+1] = {symbolMap[j], readbits(maxL)} end
+                        end
+                    else
+                        -- list-based dictionary
+                        --print("list")
+                        local nSym = readbits(nBits) + 1
+                        for i = 1, nSym do Ls[#Ls+1] = {symbolMap[readbits(nBits)], readbits(maxL)} end
                     end
                 else
-                    -- list-based dictionary
-                    --print("list")
-                    local nSym = readbits(nBits) + 1
-                    for i = 1, nSym do Ls[#Ls+1] = {symbolMap[readbits(nBits)], readbits(R)} end
+                    -- Huffman dictionary
+                    local bitlen = {}
+                    local bitidx = 0
+                    local maxs = readbits(12)
+                    while bitidx < maxs do
+                        if readbits(1) == 1 then
+                            local n, c = readbits(3) + 2, readbits(4)
+                            for _ = 1, n do
+                                if c > 0 then bitlen[#bitlen+1] = {symbolMap[bitidx], 2^c} end
+                                bitidx = bitidx + 1
+                            end
+                        else
+                            local l = readbits(4)
+                            if l > 0 then bitlen[#bitlen+1] = {symbolMap[bitidx], 2^l} end
+                            bitidx = bitidx + 1
+                        end
+                    end
+                    Ls = bitlen
                 end
             else
                 -- static dictionary
@@ -266,6 +289,7 @@ local function decompress(data)
     readbits(1)
     local identfreq = {}
     for i = 0, maxident do identfreq[#identfreq+1] = {i, 1} end
+    for i = -8, 7 do identfreq[#identfreq+1] = {"+" .. i, 8} end
     for i = 0, 10 do identfreq[#identfreq+1] = {":repeat" .. i, 2} end
     for i = 11, 29 do identfreq[#identfreq+1] = {":repeat" .. i, 1} end
     local identcodes = blockdecompress(readbits, identbits, makeLs(identfreq), setmetatable({}, {__index = function(_, v)
@@ -293,12 +317,15 @@ local function decompress(data)
     identifiers[0] = table.remove(identifiers, 1)
     local numstream = makeReader(numdata)
     -- read tokens
-    local tokens, stringpos, identpos = {}, 1, 1
+    local tokens, stringpos, identpos, lastident = {}, 1, 1, 0
     for i, node in ipairs(tokentab) do
         if node == ":end" then break
         elseif node == ":name" then
             --if identpos < 16 then print(#tokens, identpos, identcodes[identpos], identifiers[identcodes[identpos]]) end
-            tokens[#tokens+1] = identifiers[identcodes[identpos]]
+            local id = identcodes[identpos]
+            if type(id) == "string" then id = lastident + tonumber(id:sub(2)) end
+            tokens[#tokens+1] = identifiers[id]
+            lastident = id
             identpos = identpos + 1
         elseif node == ":string" then
             tokens[#tokens+1] = ("%q"):format(strings[stringpos]):gsub("\\?\n", "\\n"):gsub("\t", "\\t"):gsub("[%z\1-\31\127-\255]", function(n) return ("\\%03d"):format(n:byte()) end)

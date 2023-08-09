@@ -1,5 +1,8 @@
 local function leafcomp(a, b) return a.weight > b.weight end
-local function sortcodes(a, b) if a.bits == b.bits then return a.symbol < b.symbol else return a.bits < b.bits end end
+local function sortcodes(symbolMap)
+    if symbolMap then return function(a, b) if a.bits == b.bits then return symbolMap[a.symbol] < symbolMap[b.symbol] else return a.bits < b.bits end end
+    else return function(a, b) if a.bits == b.bits then return a.symbol < b.symbol else return a.bits < b.bits end end end
+end
 
 local function loadcodes(node, codes, map, partial)
     if node.data then
@@ -16,7 +19,7 @@ end
 -- returns a key-value map of symbol to {bits: number, code: number}, the names and lengths of each code in the input order, and a decoding tree (1-indexed!)
 -- if there are 0 entries, returns nil
 -- if there is 1 entry, returns false + the index of the identifier
-local function maketree(histogram)
+local function maketree(histogram, symbolMap)
     -- make initial tree
     local queue = {}
     for i, v in ipairs(histogram) do if v[2] > 0 then queue[#queue+1] = {data = v[1], weight = v[2]} end end
@@ -37,7 +40,7 @@ local function maketree(histogram)
     -- make canonical codebook
     local codes, map = {}, {}
     loadcodes(queue[1], codes, map, {bits = 0, code = 0})
-    table.sort(codes, sortcodes)
+    table.sort(codes, sortcodes(symbolMap))
     codes[1].code = 0
     for i = 2, #codes do codes[i].code = bit32.lshift(codes[i-1].code + 1, codes[i].bits - codes[i-1].bits) end
     local lengths = {}

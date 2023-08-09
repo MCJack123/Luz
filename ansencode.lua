@@ -32,8 +32,9 @@ function ansencode.makeLs(freq)
     return Ls
 end
 
-function ansencode.encodeSymbols(symbols, Ls, out, startPos)
+function ansencode.encodeSymbols(symbols, Ls, out, startPos, maxBlockSize)
     startPos = startPos or 1
+    maxBlockSize = maxBlockSize or 262144
     local R = Ls.R
     local L = 2^R
     -- prepare encoding
@@ -69,8 +70,8 @@ function ansencode.encodeSymbols(symbols, Ls, out, startPos)
     else iter, state, init = function(t, i) if t[i-1] then return i - 1, t[i - 1] end end, symbols, #symbols + 2 - startPos end
     for _, s in iter, state, init do
         local nbBits = bit32_rshift(x + nb[s], R + 1)
-        if nproc + nbBits + R + 8 >= 262144 then
-            stop = nproc
+        if bitcount + nbBits + R + 8 >= maxBlockSize then
+            stop = startPos + nproc
             break
         end
         bitbuf[#bitbuf+1] = {bit32_band(x, 2^nbBits-1), nbBits}
@@ -96,9 +97,20 @@ end
 function ansencode.encodeDictionary(Ls, symbolMap, nBits, out)
     if out then out(Ls.R, 4) end
     -- calculate ranges
-    local listSize = nBits + #Ls * (nBits + Ls.R)
     local rangeList = {}
-    for i, v in ipairs(Ls) do rangeList[i] = symbolMap[v[1]] end
+    local maxL = 0
+    for i, v in ipairs(Ls) do
+        rangeList[i] = symbolMap[v[1]]
+        maxL = math.max(maxL, v[2])
+    end
+    maxL = math_max(math_floor(log2(maxL) + 1), 1)
+    local Lssize = 0
+    for _, v in ipairs(Ls) do
+        if v[2] < 2^math.floor(maxL/2) then Lssize = Lssize + math.floor(maxL/2)
+        else Lssize = Lssize + maxL end
+    end
+    local listSize = nBits + #Ls * nBits + Lssize
+    if out then out(maxL, 4) end
     local ranges = {}
     local curRangeMin, curRangeMax = rangeList[1], rangeList[1]
     for i = 2, #rangeList do
@@ -109,32 +121,48 @@ function ansencode.encodeDictionary(Ls, symbolMap, nBits, out)
         curRangeMax = rangeList[i]
     end
     ranges[#ranges+1] = {curRangeMin, curRangeMax}
-    local rangeSize = 5 + #ranges * nBits * 2 + #Ls * Ls.R
-    if rangeSize < listSize and #ranges < 32 then
+    local rangeSize = 8 + #ranges * nBits * 2 + Lssize
+    if rangeSize < listSize and #ranges < 256 then
         -- encode range-based dictionary
         if not out then return rangeSize + 5 end
-        print("Dictionary size:", rangeSize + 5, "(range)")
+        print("Dictionary size:", rangeSize + 5, "(range)", Ls.R, maxL)
         out(1, 1)
-        out(#ranges, 5)
+        out(#ranges, 8)
         for _, v in ipairs(ranges) do
             out(v[1], nBits)
             out(v[2], nBits)
             --print(v[1], v[2])
             for i = v[1], v[2] do
                 local found = false
-                for _, p in ipairs(Ls) do if symbolMap[p[1]] == i then out(p[2], Ls.R) found = true break end end
+                for _, p in ipairs(Ls) do if symbolMap[p[1]] == i then
+                    if p[2] < 2^math.floor(maxL/2) then
+                        out(0, 1)
+                        out(p[2], math.floor(maxL/2))
+                    else
+                        out(1, 1)
+                        out(p[2], maxL)
+                    end
+                    found = true
+                    break
+                end end
                 if not found then error("did not find entry for " .. i) end
             end
         end
     else
         -- encode list-based dictionary
         if not out then return listSize + 5 end
-        print("Dictionary size:", listSize + 5, "(list)")
+        print("Dictionary size:", listSize + 5, "(list)", Ls.R, maxL)
         out(0, 1)
         out(#Ls - 1, nBits)
         for _, v in ipairs(Ls) do
             out(symbolMap[v[1]], nBits)
-            out(v[2], Ls.R)
+            if v[2] < 2^math.floor(maxL/2) then
+                out(0, 1)
+                out(v[2], math.floor(maxL/2))
+            else
+                out(1, 1)
+                out(v[2], maxL)
+            end
         end
     end
 end

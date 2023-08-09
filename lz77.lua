@@ -21,8 +21,9 @@ local function lz77(tokens, maxdist)
                 for n = #lblist, 1, -1 do
                     local l = lblist[n]
                     if i - l > maxdist then break end
-                    for j = 1, math_min(i - l, #tokens - i, 129) do
-                        if tokens[i+j] == tokens[l+j] then
+                    for j = 1, math_min(#tokens - i, 129) do
+                        local lj = (j - 1) % (i - l) + 1
+                        if tokens[i+j] == tokens[l+lj] then
                             if j > max then max, pos = j, l end
                         else break end
                     end
@@ -52,10 +53,11 @@ local function lz77(tokens, maxdist)
                 for n = #lblist, 1, -1 do
                     local l = lblist[n]
                     if i - l > maxdist then break end
-                    for j = 1, math_min(i - l, #tokens - i, 129) do
-                        if tokens[i+j].type == tokens[l+j].type and tokens[i+j].text == tokens[l+j].text then
+                    for j = 1, math_min(#tokens - i, 129) do
+                        local lj = (j - 1) % (i - l) + 1
+                        if tokens[i+j].type == tokens[l+lj].type and tokens[i+j].text == tokens[l+lj].text then
                             if j > max then max, pos = j, l end
-                            if tokens[l+j].names then break end
+                            if tokens[l+lj].names then break end
                         else break end
                     end
                 end

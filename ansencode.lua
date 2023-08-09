@@ -65,7 +65,7 @@ function ansencode.encodeSymbols(symbols, Ls, out, startPos, maxBlockSize)
     local bitbuf = {}
     local x = L
     local iter, state, init
-    local bitcount, stop, nproc = 0, nil, 1
+    local bitcount, stop, nproc = 0, nil, 0
     if type(symbols) == "string" then iter, state, init = symbols:reverse():sub(startPos):gmatch "()(.)"
     else iter, state, init = function(t, i) if t[i-1] then return i - 1, t[i - 1] end end, symbols, #symbols + 2 - startPos end
     for _, s in iter, state, init do

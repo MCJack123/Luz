@@ -182,10 +182,11 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out, maxBlock
         end
         --print("dict", #out.data, out.len)
         local stop = ansencode.encodeSymbols(symbols, Ls, out, start, maxBlockSize)
+        print("stop", stop)
         -- get LZ77 data
         local distfreq = {}
         local lzdata = {}
-        for i = start, stop and stop - 1 or #symbols do
+        for i = #symbols - (stop and stop - 1 or #symbols) + 1, #symbols - start + 1 do
             if lzcodes[i] then
                 distfreq[lzcodes[i][1].code] = (distfreq[lzcodes[i][1].code] or 0) + 1
                 lzdata[#lzdata+1] = lzcodes[i]
@@ -199,6 +200,7 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out, maxBlock
             for i = 0, 29 do distlist[i+1] = {i, distfreq[i] or 0} end
             local dist = {}
             dist.map, dist.lengths = maketree(distlist)
+            local distsize = 0
             if dist.map then
                 -- write full distance tree
                 out(1, 1)
@@ -207,9 +209,11 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out, maxBlock
                     if c ~= dist.lengths[i] or n == 8 then
                         if n == 0 then
                             out(0, 1)
+                            distsize = distsize + 5
                         else
                             out(1, 1)
                             out(n - 1, 3)
+                            distsize = distsize + 8
                         end
                         out(c, 4)
                         c, n = dist.lengths[i], 0
@@ -219,9 +223,11 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out, maxBlock
                 end
                 if n == 0 then
                     out(0, 1)
+                    distsize = distsize + 5
                 else
                     out(1, 1)
                     out(n - 1, 3)
+                    distsize = distsize + 8
                 end
                 out(c, 4)
             else
@@ -229,8 +235,10 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out, maxBlock
                 out(0, 1)
                 out(1, 1)
                 out(dist.lengths, 5)
+                distsize = 7
             end
             -- write LZ77 codes
+            print("LZ distance tree size:", distsize)
             print("Number of LZ:", #lzdata)
             local lzbits = 0
             for _, v in ipairs(lzdata) do
@@ -241,6 +249,7 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out, maxBlock
             end
             print("LZ size:", lzbits)
         end
+        print(#out.data, out.len)
         start = stop
     until start == nil
 end

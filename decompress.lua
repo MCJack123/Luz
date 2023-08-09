@@ -1,21 +1,10 @@
-local token_frequencies = require "token_frequencies"
-local name_frequencies = require "name_frequencies"
-local string_frequencies = require "string_frequencies"
-local number_frequencies = require "number_frequencies"
+local all_frequencies = require "all_frequencies"
 
 local bit32_band, bit32_rshift, bit32_lshift, math_frexp = bit32.band, bit32.rshift, bit32.lshift, math.frexp
 local function log2(n) local _, r = math_frexp(n) return r-1 end
 
-local b64str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_\0"
-local b64lut = {}
-for i, c in b64str:gmatch "()(.)" do b64lut[i-1] = c end
-for i = 0, 11 do b64lut[i + 64] = ":repeat" .. i end
-
-local strlut = setmetatable({[256] = ":end"}, {__index = function(_, c) return string.char(c) end})
-for i = 0, 15 do strlut[i + 257] = ":repeat" .. i end
-
 local tokenlut = {}
-for i, v in ipairs(token_frequencies) do tokenlut[i] = v[1] end
+for i, v in ipairs(all_frequencies) do tokenlut[i] = v[1] end
 
 local rlemap = {2, 6, 22, 86, 342, 1366, 5462}
 
@@ -82,10 +71,11 @@ local function ansdecode(readbits, nbits, decodingTable)
 end
 
 local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
-    local retval = {}
+    local combined, lzcodes = {}, {}
     repeat
+        local retval = {}
         --print("loop", #retval)
-        readbits()
+        --readbits()
         if readbits(1) == 0 then
             -- decode RLE
             local bits = readbits(3)
@@ -93,13 +83,11 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
             if bits == 0 then nEntries = 1
             else nEntries = readbits(bits * 2) + rlemap[bits] end
             --print(nEntries)
-            readbits()
+            --readbits()
             for i = 1, nEntries do
                 local n, c = readbits(4), readbits(nBits)
                 for j = 0, n do retval[#retval+1] = symbolMap[c] end
             end
-            readbits()
-            error()
         else
             -- check dictionary
             local Ls
@@ -114,7 +102,7 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
                     if readbits(1) == 1 then
                         -- range-based dictionary
                         --print("range")
-                        readbits()
+                        --readbits()
                         local nRange = readbits(5)
                         for i = 1, nRange do
                             local low, high = readbits(nBits), readbits(nBits)
@@ -158,6 +146,7 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
             local ansbits = readbits(18)
             --print("bits", ansbits)
             local ansdata = ansdecode(readbits, ansbits, decodingTable)
+            --print(#ansdata)
             -- substitute LZ77
             local codetree
             readbits()
@@ -199,7 +188,7 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
                 -- single distance code
                 codetree = readbits(5)
             end
-            local numlz = 0
+            local numlz, mylz = 0, {}
             for _, v in ipairs(ansdata) do
                 if string.match(v, "^:repeat") then
                     local lencode = tonumber(v:match "^:repeat(%d+)")
@@ -216,15 +205,27 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
                         local extra = readbits(ebits)
                         distcode = bit32.bor(extra, bit32.lshift(bit32.band(node, 1) + 2, ebits)) + 1
                     else distcode = node + 1 end
-                    for _ = 1, lencode do retval[#retval+1] = retval[#retval-distcode+1] end
+                    mylz[#mylz+1] = {distcode, lencode}
                     numlz = numlz + 1
-                else
-                    retval[#retval+1] = v
                 end
+                retval[#retval+1] = v
             end
+            for _, v in ipairs(lzcodes) do mylz[#mylz+1] = v end
+            lzcodes = mylz
             --print("number of LZ:", numlz)
         end
+        for _, v in ipairs(combined) do retval[#retval+1] = v end
+        combined = retval
+        readbits()
     until readbits(1) == 1
+    local retval, lzpos = {}, 1
+    for _, v in ipairs(combined) do
+        if string.match(v, "^:repeat") then
+            local distcode, lencode = lzcodes[lzpos][1], lzcodes[lzpos][2]
+            for _ = 1, lencode do retval[#retval+1] = retval[#retval-distcode+1] end
+            lzpos = lzpos + 1
+        else retval[#retval+1] = v end
+    end
     return retval
 end
 
@@ -240,107 +241,47 @@ end
 local function number(readbits)
     local type = readbits(2)
     if type >= 2 then
-        local esign = readbits(1)
-        local e = 0
+        local esign, e = readbits(1), 0
         repeat
             local n = readbits(4)
             e = bit32_lshift(e, 3) + bit32_band(n, 7)
         until n < 8
         if esign == 1 then e = -e end
-        local m = varint(readbits) / 0x20000000000000 + 0.5
-        return math.ldexp(m, e) * (type == 2 and 1 or -1)
+        return math.ldexp(varint(readbits) / 0x20000000000000 + 0.5, e) * (type == 2 and 1 or -1)
     else
         return varint(readbits) * (type == 0 and 1 or -1)
     end
-end
-
-local function makeLs(freq)
-    local nL = 4
-    local Ls
-    repeat
-        nL = nL * 2
-        local L, total = 0, 0
-        for _, v in ipairs(freq) do L = L + nL total = total + v[2] end
-        local R = math.max(math.floor(log2(L) + 1), 1)
-        L = 2^R
-        Ls = {R = R}
-        local freqsum, sumLs = 0, 0
-        local fail = false
-        for _, p in ipairs(freq) do
-            local s, v = p[1], p[2]
-            freqsum = freqsum + v / total
-            Ls[#Ls+1] = {s, math.floor(freqsum * L + 0.5) - sumLs}
-            if Ls[#Ls][2] == 0 then fail = true end
-            sumLs = sumLs + Ls[#Ls][2]
-        end
-    until not fail
-    return Ls
 end
 
 local function decompress(data)
     if data:sub(1, 5) ~= "\27LuzA" then error("invalid format", 2) end
     local readbits = makeReader(data:sub(6))
     readbits(1)
-    -- read all tables
-    local stringtab = blockdecompress(readbits, 9, string_frequencies, strlut)
-    local identtab = blockdecompress(readbits, 7, name_frequencies, b64lut)
-    local identbits = readbits(6)
-    local maxident = readbits(identbits)
-    readbits(1)
-    local identfreq = {}
-    for i = 0, maxident do identfreq[#identfreq+1] = {i, 1} end
-    for i = -8, 7 do identfreq[#identfreq+1] = {"+" .. i, 8} end
-    for i = 0, 10 do identfreq[#identfreq+1] = {":repeat" .. i, 2} end
-    for i = 11, 29 do identfreq[#identfreq+1] = {":repeat" .. i, 1} end
-    local identcodes = blockdecompress(readbits, identbits, makeLs(identfreq), setmetatable({}, {__index = function(_, v)
-        if v > maxident then return ":repeat" .. (v - maxident - 1) end
-        return v
-    end}))
-    readbits()
-    local numtab = blockdecompress(readbits, 9, number_frequencies, strlut)
-    local tokentab = blockdecompress(readbits, 7, token_frequencies, tokenlut)
-    -- recombine tables
-    local identifiers, strings, numbers, partial, numdata = {}, {}, {}, "", table.concat(numtab)
-    for _, v in ipairs(stringtab) do
-        if v == ":end" then
-            strings[#strings+1] = partial
-            partial = ""
-        else partial = partial .. v end
-    end
-    partial = ""
-    for _, v in ipairs(identtab) do
-        if v == "\0" then
-            identifiers[#identifiers+1] = partial
-            partial = ""
-        else partial = partial .. v end
-    end
-    identifiers[0] = table.remove(identifiers, 1)
-    local numstream = makeReader(numdata)
+    -- read symbols
+    local tokentab = blockdecompress(readbits, 7, all_frequencies, tokenlut)
     -- read tokens
-    local tokens, stringpos, identpos, lastident = {}, 1, 1, 0
-    for i, node in ipairs(tokentab) do
-        if node == ":end" then break
-        elseif node == ":name" then
-            --if identpos < 16 then print(#tokens, identpos, identcodes[identpos], identifiers[identcodes[identpos]]) end
-            local id = identcodes[identpos]
-            if type(id) == "string" then id = lastident + tonumber(id:sub(2)) end
-            tokens[#tokens+1] = identifiers[id]
-            lastident = id
-            identpos = identpos + 1
-        elseif node == ":string" then
-            tokens[#tokens+1] = ("%q"):format(strings[stringpos]):gsub("\\?\n", "\\n"):gsub("\t", "\\t"):gsub("[%z\1-\31\127-\255]", function(n) return ("\\%03d"):format(n:byte()) end)
-            stringpos = stringpos + 1
-        elseif node == ":number" then
-            tokens[#tokens+1] = tostring(number(numstream))
-        else tokens[#tokens+1] = node end
+    local tokens, partial, ptype = {}
+    for _, node in ipairs(tokentab) do
+        --print(node)
+        if type(node) == "number" then
+            partial = partial .. string.char(node)
+        else
+            if partial then
+                if ptype == ":string" then tokens[#tokens+1] = ("%q"):format(partial):gsub("\\?\n", "\\n"):gsub("\t", "\\t"):gsub("[%z\1-\31\127-\255]", function(n) return ("\\%03d"):format(n:byte()) end)
+                elseif ptype == ":name" then tokens[#tokens+1] = partial
+                else tokens[#tokens+1] = tostring(number(makeReader(partial))) end
+                partial, ptype = nil
+            end
+            if node == ":end" then break
+            elseif node == ":name" or node == ":string" or node == ":number" then partial, ptype = "", node
+            else tokens[#tokens+1] = node end
+        end
     end
     -- create source
-    local retval = ""
-    local lastchar, lastdot = false, false
+    local retval, lastchar, lastdot = "", false, false
     for _, v in ipairs(tokens) do
         if (lastchar and v:match "^[A-Za-z0-9_]") or (lastdot and v:match "^%.") then retval = retval .. " " end
-        retval = retval .. v
-        lastchar, lastdot = v:match "[A-Za-z0-9_]$", v:match "%.$"
+        retval, lastchar, lastdot = retval .. v, v:match "[A-Za-z0-9_]$", v:match "%.$"
     end
     return retval
 end

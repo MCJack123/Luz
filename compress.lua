@@ -1,21 +1,10 @@
 local lz77 = require "lz77"
-local token_frequencies = require "token_frequencies"
-local name_frequencies = require "name_frequencies"
-local string_frequencies = require "string_frequencies"
-local number_frequencies = require "number_frequencies"
+local all_frequencies = require "all_frequencies"
 local blockcompress = require "blockcompress"
 local ansencode = require "ansencode"
 
-local b64str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_\0"
-local b64lut = {}
-for i, c in b64str:gmatch "()(.)" do b64lut[c] = i-1 end
-for i = 0, 11 do b64lut[":repeat" .. i] = i + 64 end
-
-local strlut = setmetatable({[":end"] = 256}, {__index = function(_, c) return c:byte() end})
-for i = 0, 15 do strlut[":repeat" .. i] = i + 257 end
-
 local tokenlut = {}
-for i, v in ipairs(token_frequencies) do tokenlut[v[1]] = i end
+for i, v in ipairs(all_frequencies) do tokenlut[v[1]] = i end
 
 local function round(n) return math.floor(n + 0.5) end
 
@@ -63,86 +52,35 @@ end
 
 local function compress(tokens, level)
     local maxdist = level and (level == 0 and 0 or 2^(level+6))
-    -- create input string and identifier tables
-    local strtab, identtab, identlut, identcodes = {}, {}, {}, {}
-    local numberstream = bitstream()
-    local canUseStaticString, maxident = true, 0
+    -- create master table
+    local newtok = {}
     for _, v in ipairs(tokens) do
-        if v.type == "string" and not tokenlut[v.text] then
-            local data = v.text:gsub('^[\'"]', ""):gsub('[\'"]$', ""):gsub("^%[=*%[", ""):gsub("%]=*%]", "")
-            if data:match "[^\32-\126]" then canUseStaticString = false end
-            for c in data:gmatch "." do strtab[#strtab+1] = c end
-            strtab[#strtab+1] = ":end"
-        elseif v.type == "name" and not tokenlut[v.text] then
-            if not identlut[v.text] then
-                for c in v.text:gmatch "[0-9A-Za-z_]" do identtab[#identtab+1] = c end
-                identtab[#identtab+1] = "\0"
-                identlut[v.text] = maxident
-                maxident = maxident + 1
+        v.text = v.text:gsub("^'", '"'):gsub("'$", '"')
+        if tokenlut[v.text] or v.type == "keyword" or v.type == "operator" or v.type == "constant" then
+            newtok[#newtok+1] = v.text
+        else
+            newtok[#newtok+1] = ":" .. v.type
+            if v.type == "name" then
+                for c in v.text:gmatch "[A-Za-z0-9_]" do newtok[#newtok+1] = c:byte() end
+            elseif v.type == "number" then
+                local numstream = bitstream()
+                number(numstream, tonumber(v.text))
+                numstream()
+                for c in numstream.data:gmatch "." do newtok[#newtok+1] = c:byte() end
+            elseif v.type == "string" then
+                local data = v.text:gsub('^"', ""):gsub('"$', ""):gsub("^%[=*%[", ""):gsub("%]=*%]", "")
+                for c in data:gmatch "." do newtok[#newtok+1] = c:byte() end
             end
-            identcodes[#identcodes+1] = identlut[v.text]
-        elseif v.type == "number" and not tokenlut[v.text] then
-            number(numberstream, tonumber(v.text))
         end
     end
-    local curident = 0
-    for i, v in ipairs(identcodes) do
-        if v - curident >= -8 and v - curident <= 7 then
-            identcodes[i] = "+" .. (v - curident)
-        end
-        curident = v
-    end
-    maxident = maxident - 1
-    print("maxident", maxident)
-    numberstream()
-    local numtab = {}
-    for i, c in numberstream.data:gmatch "()(.)" do numtab[i] = c end
-    -- run LZ77 on all tables
-    strtab = lz77(strtab, maxdist)
-    identtab = lz77(identtab, maxdist)
-    identcodes = lz77(identcodes, maxdist)
-    numtab = lz77(numtab, maxdist)
-    tokens = lz77(tokens, maxdist)
-    -- create token symbols
-    local symbols = {}
-    for i, v in ipairs(tokens) do
-        if v.type:match "^repeat" then symbols[i] = {v.dist, v.len}
-        elseif tokenlut[v.text] and not v.type:match "^repeat" then symbols[i] = v.text
-        else symbols[i] = ":" .. v.type end
-    end
-    local identcodemap = setmetatable({}, {__index = function(_, v) return v end})
-    for i = -8, 7 do identcodemap["+" .. i] = maxident + i + 9 end
-    for i = 0, 29 do identcodemap[":repeat" .. i] = maxident + i + 17 end
+    -- run LZ77 on the table
+    local symbols = lz77(newtok, maxdist)
     local out = bitstream()
     out.data = "\x1bLuzA"
-    -- compress blocks
-    print("-- String table --")
-    blockcompress(strtab, 9, canUseStaticString and string_frequencies or nil, strlut, out)
-    local strtabsize = #out.data - 5
-    print("-- Identifier table --")
-    blockcompress(identtab, 7, name_frequencies, b64lut, out)
-    local identtabsize = #out.data - strtabsize - 5
-    local identnbits = math.floor(math.log(maxident + 20, 2)) + 1
-    out(1, 1)
-    out(identnbits, 6)
-    out(maxident, identnbits)
-    local identfreq = {}
-    for i = 0, maxident do identfreq[#identfreq+1] = {i, 1} end
-    for i = -8, 7 do identfreq[#identfreq+1] = {"+" .. i, 8} end
-    for i = 0, 10 do identfreq[#identfreq+1] = {":repeat" .. i, 2} end
-    for i = 11, 29 do identfreq[#identfreq+1] = {":repeat" .. i, 1} end
-    print("-- Identifier codes --")
-    blockcompress(identcodes, identnbits, ansencode.makeLs(identfreq), identcodemap, out)
-    local identcodesize = #out.data - identtabsize - strtabsize - 5
-    print("-- Number list --")
-    blockcompress(numtab, 9, number_frequencies, strlut, out)
-    local numtabsize = #out.data - identcodesize - identtabsize - strtabsize - 5
-    print("-- Tokens --")
-    blockcompress(symbols, 7, token_frequencies, tokenlut, out)
+    -- compress block
+    blockcompress(symbols, 9, all_frequencies, tokenlut, out)
     out(1, 1)
     out()
-    local tokenlistsize = #out.data - numtabsize - identcodesize - identtabsize - strtabsize - 5
-    print(strtabsize, identtabsize, identcodesize, numtabsize, tokenlistsize)
     return out.data
 end
 

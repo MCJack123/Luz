@@ -328,12 +328,24 @@ local function decompress(data)
     -- read distance & identifier code lengths
     local disttree = nametree(self, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29})
     local codetree = nametree(self, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29})
+    local tokentree
+    if getBitsR(self, 1) == 1 then
+        local tokenlist = {{":name", 0}, {":string", 0}, {":number", 0}}
+        for i = 0, 29 do tokenlist[#tokenlist+1] = {":repeat" .. i, 0} end
+        local function extract(node)
+            if type(node) == "string" then tokenlist[#tokenlist+1] = node
+            else extract(node[1]) extract(node[2]) end
+        end
+        extract(token_decode_tree)
+        table.sort(tokenlist)
+        tokentree = nametree(self, tokenlist)
+    else tokentree = token_decode_tree end
     -- read tokens
     local stringpos, namepos = 1, 1
     local tokens = {}
     local namelist = {}
     while true do
-        local node = token_decode_tree
+        local node = tokentree
         while type(node) == "table" do node = node[getBitsR(self, 1)+1] end
         if node == ":end" then break
         elseif node == ":name" then

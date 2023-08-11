@@ -277,8 +277,7 @@ local function decompress(data)
                 else tokens[#tokens+1] = tostring(number(makeReader(partial))) end
                 partial, ptype = nil
             end
-            if node == ":end" then break
-            elseif node == ":name" or node == ":string" or node == ":number" then partial, ptype = "", node
+            if node == ":name" or node == ":string" or node == ":number" then partial, ptype = "", node
             else tokens[#tokens+1] = node end
         end
     end

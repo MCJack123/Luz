@@ -1,16 +1,16 @@
 local lz77 = require "lz77"
 local all_frequencies = require "all_frequencies"
 local blockcompress = require "blockcompress"
-local ansencode = require "ansencode"
 
 local tokenlut = {}
-for i, v in ipairs(all_frequencies) do tokenlut[v[1]] = i end
+for i, v in ipairs(all_frequencies) do tokenlut[v[1]] = i-1 end
 
 local function round(n) return math.floor(n + 0.5) end
 
 local function bitstream()
     return setmetatable({data = "", partial = 0, len = 0}, {__call = function(self, bits, len)
         if not bits then bits, len = 0, 8 - self.len end
+        assert(bits < 2^len)
         self.partial = bit32.bor(bit32.lshift(self.partial, len), bits)
         self.len = self.len + len
         while self.len >= 8 do

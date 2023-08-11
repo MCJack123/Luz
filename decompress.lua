@@ -4,7 +4,7 @@ local bit32_band, bit32_rshift, bit32_lshift, math_frexp = bit32.band, bit32.rsh
 local function log2(n) local _, r = math_frexp(n) return r-1 end
 
 local tokenlut = {}
-for i, v in ipairs(all_frequencies) do tokenlut[i] = v[1] end
+for i, v in ipairs(all_frequencies) do tokenlut[i-1] = v[1] end
 
 local rlemap = {2, 6, 22, 86, 342, 1366, 5462}
 
@@ -52,18 +52,16 @@ local function generateDecodeTable(Ls)
     return decodingTable
 end
 
-local function ansdecode(readbits, nbits, decodingTable)
+local function ansdecode(readbits, nsym, decodingTable)
     local X = readbits(decodingTable.R)
-    nbits = nbits - decodingTable.R
     local retval = {}
-    while nbits > 0 do
+    for i = 1, nsym do
         local t = decodingTable[X]
-        retval[#retval+1] = t.symbol
+        retval[i] = t.symbol
         --print(t.symbol, X, nbits)
         --readbits()
         --if nbits == 0 then break end
         X = t.newX + readbits(t.nbBits)
-        nbits = nbits - t.nbBits
     end
     --retval[#retval+1] = decodingTable[X].symbol
     --print(decodingTable[X].symbol, X)
@@ -93,12 +91,12 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
             local Ls
             if readbits(1) == 1 then
                 -- dynamic dictionary
-                local R = readbits(4)
-                local maxL = readbits(4)
-                --print(R)
-                Ls = {R = R}
                 if readbits(1) == 1 then
                     -- ANS dictionary
+                    local R = readbits(5)
+                    local maxL = readbits(5)
+                    --print(R)
+                    Ls = {R = R}
                     if readbits(1) == 1 then
                         -- range-based dictionary
                         --print("range")
@@ -117,18 +115,23 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
                     end
                 else
                     -- Huffman dictionary
-                    local bitlen = {}
+                    local R = readbits(5)
+                    local bitlen = {R = R}
                     local bitidx = 0
-                    local maxs = readbits(12)
-                    while bitidx < maxs do
+                    local maxs = readbits(9)
+                    --print(R, maxs, #symbolMap)
+                    while bitidx <= maxs do
                         if readbits(1) == 1 then
-                            local n, c = readbits(3) + 2, readbits(4)
+                            local n, c = readbits(3) + 2, readbits(5)
                             for _ = 1, n do
+                                --print(c)
                                 if c > 0 then bitlen[#bitlen+1] = {symbolMap[bitidx], 2^c} end
+                                --print(bitidx)
                                 bitidx = bitidx + 1
                             end
                         else
-                            local l = readbits(4)
+                            local l = readbits(5)
+                            --print(l)
                             if l > 0 then bitlen[#bitlen+1] = {symbolMap[bitidx], 2^l} end
                             bitidx = bitidx + 1
                         end
@@ -143,9 +146,9 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
             -- decode ANS block
             readbits()
             local decodingTable = generateDecodeTable(Ls)
-            local ansbits = readbits(18)
-            --print("bits", ansbits)
-            local ansdata = ansdecode(readbits, ansbits, decodingTable)
+            local anssyms = readbits(18)
+            --print("syms", anssyms)
+            local ansdata = ansdecode(readbits, anssyms, decodingTable)
             --print(#ansdata)
             -- substitute LZ77
             local codetree
@@ -158,11 +161,13 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
                     if readbits(1) == 1 then
                         local n, c = readbits(3) + 2, readbits(4)
                         for _ = 1, n do
+                            --print(c)
                             if c > 0 then bitlen[#bitlen+1] = {s = bitidx, l = c} end
                             bitidx = bitidx + 1
                         end
                     else
                         local l = readbits(4)
+                        --print(l)
                         if l > 0 then bitlen[#bitlen+1] = {s = bitidx, l = l} end
                         bitidx = bitidx + 1
                     end

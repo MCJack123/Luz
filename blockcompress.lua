@@ -59,7 +59,8 @@ local function huffdict(LsH, symbolMap, out)
     end
     local c, n = lengths[0] or 0, 0
     local nbits = 0
-    if out then out(maxs, 12) end
+    --if out then print(#out.data, out.len, LsH.R, maxs) end
+    if out then out(LsH.R, 5) out(maxs, 9) end
     for i = 1, maxs do
         if c ~= (lengths[i] or 0) or n == 8 then
             if out then
@@ -69,9 +70,10 @@ local function huffdict(LsH, symbolMap, out)
                     out(1, 1)
                     out(n - 1, 3)
                 end
-                out(c, 4)
+                --print(c, n)
+                out(c, 5)
             end
-            nbits = nbits + (n == 0 and 5 or 8)
+            nbits = nbits + (n == 0 and 6 or 9)
             c, n = (lengths[i] or 0), 0
         else
             n = n + 1
@@ -84,10 +86,11 @@ local function huffdict(LsH, symbolMap, out)
             out(1, 1)
             out(n - 1, 3)
         end
-        out(c, 4)
-        print("Dictionary size:", nbits + (n == 0 and 5 or 8), "(Huffman)")
+        --print(c, n)
+        out(c, 5)
+        print("Dictionary size:", nbits + (n == 0 and 6 or 9), "(Huffman)")
     end
-    return nbits + (n == 0 and 5 or 8)
+    return nbits + (n == 0 and 6 or 9)
 end
 
 local function blockcompress(symbols, nBits, defaultLs, symbolMap, out, maxBlockSize)
@@ -98,73 +101,74 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out, maxBlock
         out(0, 3) -- no symbols
         return
     end
-    -- extract probabilities
-    local freq = {}
-    local lzcodes = {}
-    for i = 1, #symbols do
-        local s = symbols[i]
-        if type(s) == "table" then
-            symbols[i] = ":repeat" .. s[2].code
-            lzcodes[i] = s
-            s = symbols[i]
-        end
-        freq[s] = (freq[s] or 0) + 1
-    end
-    if next(freq, next(freq)) == nil then
-        -- only one symbol; force RLE
-        out(1, 1) -- first block
-        out(0, 1) -- RLE
-        assert(math.ceil(#symbols / 16) < 21846, "RLE block too long (unimplemented)")
-        rle_varint(math.ceil(#symbols / 16), out)
-        local s = symbolMap[symbols[1]]
-        for i = 1, #symbols, 16 do
-            if #symbols - i < 16 then out(#symbols - i, 4)
-            else out(15, 4) end
-            out(s, nBits)
-        end
-        return
-    end
-    local freqlist = {}
-    for k, v in pairs(freq) do freqlist[#freqlist+1] = {k, v} end
-    table.sort(freqlist, function(a, b) return symbolMap[a[1]] < symbolMap[b[1]] end)
-    -- get sizes for each type
-    local Ls = ansencode.makeLs(freqlist)
-    local _, huffLengths = maketree(Ls, symbolMap)
-    local LsH = {}
-    local huffSum = 0
-    for i, v in ipairs(huffLengths) do assert(v > 0) LsH[i] = {Ls[i][1], 2^(Ls.R-v+1)} huffSum = huffSum + 2^(Ls.R-v+1) end
-    LsH.R = select(2, math.frexp(huffSum))-1
-    local dictSize = ansencode.encodeDictionary(Ls, symbolMap, nBits)
-    local _, rleSize = rleencode(symbols, nBits, symbolMap)
-    local _, dynBlockSize = ansencode.encodeSymbols(symbols, Ls)
-    local _, huffBlockSize = ansencode.encodeSymbols(symbols, LsH)
-    local staticSize
-    if defaultLs then _, staticSize = ansencode.encodeSymbols(symbols, defaultLs)
-    else staticSize = math.huge end
-    local dynSize = dynBlockSize + dictSize + 1
-    local huffSize = huffBlockSize + huffdict(LsH, symbolMap)
-    staticSize = staticSize + 1
     local start = 1
-    -- intentional bug: we don't count the size of LZ77 data here, but situations
-    -- where RLE wins should not be situations where LZ77 is relevant
-    -- (TODO: do a mathematical proof or something idk)
-    print("Size candidates:", rleSize, staticSize, huffSize, dynSize)
-    if rleSize < dynSize and rleSize < staticSize and rleSize < huffSize then
-        -- RLE compression blocks
-        repeat
-            out(start == 1 and 1 or 0, 1)
-            out(0, 1)
-            start = rleencode(symbols, nBits, symbolMap, out, start)
-        until start == nil
-        return
-    elseif staticSize < dynSize and staticSize < rleSize and staticSize < huffSize then
-        -- Static tree blocks
-        Ls = defaultLs
-    elseif huffSize < rleSize and huffSize < staticSize and huffSize < dynSize then
-        -- Huffman-coded dictionary
-        Ls = LsH
-    end
     repeat
+        -- extract probabilities
+        local freq = {}
+        local lzcodes = {}
+        for i = start, math.min(#symbols, start + 262143) do
+            local s = symbols[i]
+            if type(s) == "table" then
+                symbols[i] = ":repeat" .. s[2].code
+                lzcodes[i] = s
+                s = symbols[i]
+            end
+            freq[s] = (freq[s] or 0) + 1
+        end
+        if next(freq, next(freq)) == nil then
+            -- only one symbol; force RLE
+            out(1, 1) -- first block
+            out(0, 1) -- RLE
+            assert(math.ceil(#symbols / 16) < 21846, "RLE block too long (unimplemented)")
+            rle_varint(math.ceil(#symbols / 16), out)
+            local s = symbolMap[symbols[1]]
+            for i = 1, #symbols, 16 do
+                if #symbols - i < 16 then out(#symbols - i, 4)
+                else out(15, 4) end
+                out(s, nBits)
+            end
+            return
+        end
+        local freqlist = {}
+        for k, v in pairs(freq) do freqlist[#freqlist+1] = {k, v} end
+        table.sort(freqlist, function(a, b) return symbolMap[a[1]] < symbolMap[b[1]] end)
+        -- get sizes for each type
+        local Ls = ansencode.makeLs(freqlist)
+        local _, huffLengths = maketree(Ls, symbolMap)
+        local LsH = {}
+        local huffSum = 0
+        for i, v in ipairs(huffLengths) do assert(v > 0) LsH[i] = {Ls[i][1], 2^(Ls.R-v+1)} huffSum = huffSum + 2^(Ls.R-v+1) end
+        for i = 1, #Ls do assert(Ls[i][1] == LsH[i][1], i) end
+        LsH.R = select(2, math.frexp(huffSum))-1
+        local dictSize = ansencode.encodeDictionary(Ls, symbolMap, nBits)
+        local _, rleSize = rleencode(symbols, nBits, symbolMap, nil, start)
+        local _, dynBlockSize = ansencode.encodeSymbols(symbols, Ls, nil, start, math.huge)
+        local _, huffBlockSize = ansencode.encodeSymbols(symbols, LsH, nil, start, math.huge)
+        local staticSize
+        if defaultLs then _, staticSize = ansencode.encodeSymbols(symbols, defaultLs, nil, start, math.huge)
+        else staticSize = math.huge end
+        local dynSize = dynBlockSize + dictSize + 1
+        local huffSize = huffBlockSize + huffdict(LsH, symbolMap)
+        staticSize = staticSize + 1
+        -- intentional bug: we don't count the size of LZ77 data here, but situations
+        -- where RLE wins should not be situations where LZ77 is relevant
+        -- (TODO: do a mathematical proof or something idk)
+        print("Size candidates:", rleSize, staticSize, huffSize, dynSize)
+        if rleSize < dynSize and rleSize < staticSize and rleSize < huffSize then
+            -- RLE compression blocks
+            repeat
+                out(start == 1 and 1 or 0, 1)
+                out(0, 1)
+                start = rleencode(symbols, nBits, symbolMap, out, start)
+            until start == nil
+            return
+        elseif staticSize < dynSize and staticSize < rleSize and staticSize < huffSize then
+            -- Static tree blocks
+            Ls = defaultLs
+        elseif huffSize < rleSize and huffSize < staticSize and huffSize < dynSize then
+            -- Huffman-coded dictionary
+            Ls = LsH
+        end
         --print(#out.data, out.len)
         out(start == 1 and 1 or 0, 1)
         out(1, 1)
@@ -182,7 +186,7 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out, maxBlock
         end
         --print("dict", #out.data, out.len)
         local stop = ansencode.encodeSymbols(symbols, Ls, out, start, maxBlockSize)
-        print("stop", stop)
+        --print("stop", stop)
         -- get LZ77 data
         local distfreq = {}
         local lzdata = {}
@@ -205,7 +209,9 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out, maxBlock
                 -- write full distance tree
                 out(1, 1)
                 local c, n = dist.lengths[1], 0
+                --print(dist.lengths[1])
                 for i = 2, 30 do
+                    --print(dist.lengths[i])
                     if c ~= dist.lengths[i] or n == 8 then
                         if n == 0 then
                             out(0, 1)
@@ -249,7 +255,7 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out, maxBlock
             end
             print("LZ size:", lzbits)
         end
-        print(#out.data, out.len)
+        --print(#out.data, out.len)
         start = stop
     until start == nil
 end

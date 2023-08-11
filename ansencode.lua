@@ -70,7 +70,7 @@ function ansencode.encodeSymbols(symbols, Ls, out, startPos, maxBlockSize)
     else iter, state, init = function(t, i) if t[i-1] then return i - 1, t[i - 1] end end, symbols, #symbols + 2 - startPos end
     for _, s in iter, state, init do
         local nbBits = bit32_rshift(x + nb[s], R + 1)
-        if bitcount + nbBits + R + 8 >= maxBlockSize then
+        if nproc + 1 >= maxBlockSize then
             stop = startPos + nproc
             break
         end
@@ -84,7 +84,7 @@ function ansencode.encodeSymbols(symbols, Ls, out, startPos, maxBlockSize)
     --print(x)
     -- write out
     if out then
-        out(bitcount + R, 18)
+        out(nproc, 18)
         print("Size of block:", bitcount + R)
         out(x - L, R)
         for i = #bitbuf, 1, -1 do out(bitbuf[i][1], bitbuf[i][2]) end
@@ -95,13 +95,13 @@ function ansencode.encodeSymbols(symbols, Ls, out, startPos, maxBlockSize)
 end
 
 function ansencode.encodeDictionary(Ls, symbolMap, nBits, out)
-    if out then out(Ls.R, 4) end
+    if out then out(Ls.R, 5) end
     -- calculate ranges
     local rangeList = {}
     local maxL = 0
     for i, v in ipairs(Ls) do
         rangeList[i] = symbolMap[v[1]]
-        maxL = math.max(maxL, v[2])
+        maxL = math_max(maxL, v[2])
     end
     maxL = math_max(math_floor(log2(maxL) + 1), 1)
     local Lssize = 0
@@ -110,7 +110,7 @@ function ansencode.encodeDictionary(Ls, symbolMap, nBits, out)
         else Lssize = Lssize + maxL end
     end
     local listSize = nBits + #Ls * nBits + Lssize
-    if out then out(maxL, 4) end
+    if out then out(maxL, 5) end
     local ranges = {}
     local curRangeMin, curRangeMax = rangeList[1], rangeList[1]
     for i = 2, #rangeList do

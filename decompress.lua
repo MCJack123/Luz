@@ -327,10 +327,11 @@ local function decompress(data)
     for ident in identliststr:gmatch "([%z\1-\62]+)\63" do identifiers[#identifiers+1] = ident:gsub(".", b64lut) end
     -- read distance & identifier code lengths
     local disttree = nametree(self, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29})
-    local codetree = nametree(self, identifiers)
+    local codetree = nametree(self, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29})
     -- read tokens
-    local stringpos = 1
+    local stringpos, namepos = 1, 1
     local tokens = {}
+    local namelist = {}
     while true do
         local node = token_decode_tree
         while type(node) == "table" do node = node[getBitsR(self, 1)+1] end
@@ -338,7 +339,20 @@ local function decompress(data)
         elseif node == ":name" then
             node = codetree
             while type(node) == "table" do node = node[getBitsR(self, 1)+1] end
-            tokens[#tokens+1] = node
+            local ebits, distcode = math.max(math.floor(node / 2) - 1, 0)
+            if ebits > 0 then
+                local extra = getBitsR(self, ebits)
+                distcode = bit32.bor(extra, bit32.lshift(bit32.band(node, 1) + 2, ebits))
+            else distcode = node end
+            if distcode == 0 then
+                tokens[#tokens+1] = identifiers[namepos]
+                table.insert(namelist, 1, identifiers[namepos])
+                namepos = namepos + 1
+            else
+                local name = table.remove(namelist, distcode)
+                tokens[#tokens+1] = name
+                table.insert(namelist, 1, name)
+            end
         elseif node == ":string" then
             local len = varint(self)
             tokens[#tokens+1] = ("%q"):format(stringtable:sub(stringpos, stringpos + len - 1)):gsub("\\?\n", "\\n"):gsub("\t", "\\t"):gsub("[%z\1-\31\127-\255]", function(n) return ("\\%03d"):format(n:byte()) end)

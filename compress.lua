@@ -8,6 +8,13 @@ local b64lut = {}
 for i, c in b64str:gmatch "()(.)" do b64lut[c] = i-1 end
 local function round(n) if n % 1 >= 0.5 then return math.ceil(n) else return math.floor(n) end end
 
+local function distcode(i)
+    if i == 0 or i == 1 then return {code = i, extra = 0, bits = 0} end
+    local ebits = math.max(select(2, math.frexp(i)) - 2, 0)
+    local mask = 2^ebits
+    return {code = ebits * 2 + (bit32.btest(i, mask) and 3 or 2), extra = bit32.band(i, mask-1), bits = ebits}
+end
+
 local function bitstream()
     return setmetatable({data = "", partial = 0, len = 0}, {__call = function(self, bits, len)
         if not bits then bits, len = 0, 8 - self.len end
@@ -163,22 +170,7 @@ end
 
 local function compress(tokens, level)
     local maxdist = level and (level == 0 and 0 or 2^(level+6))
-    local namefreq, stringtable = {}, ""
-    local curnamefreq, curnametok, lasttok = {}, nil, 1
-    -- generate string table and prepare identifier list
-    for i, v in ipairs(tokens) do
-        if v.type == "name" and not token_encode_map[v.text] then
-            namefreq[v.text] = (namefreq[v.text] or 0) + 1
-        elseif v.type == "keyword" and v.text == "function" and i > lasttok + 512 then
-            --if curnametok then curnametok.names = {} end
-            curnametok, lasttok = v, i
-        end
-    end
-    --if curnametok then curnametok.names = {} end
-    local namelist = {}
-    for k, v in pairs(namefreq) do namelist[#namelist+1] = {k, v} end
-    table.sort(namelist, function(a, b) return a[2] > b[2] end)
-    local _nametree = mktree(namefreq, namelist)
+    local namecodefreq, namelist, stringtable, nametable = {}, {}, "", {}
     -- run LZ77 and compute distance tree
     tokens = lz77(tokens, maxdist)
     local distfreq = {}
@@ -191,26 +183,30 @@ local function compress(tokens, level)
         dist.maxlen = 0
         for _, w in ipairs(dist.lengths) do dist.maxlen = math.max(dist.maxlen, w) end
     elseif dist.map == false then dist = {idx = dist.lengths} end
-    -- compute identifier trees from LZ77'd frequency data
-    curnametok, lasttok = nil, 1
+    -- generate string table and prepare identifier list
     for i, v in ipairs(tokens) do
         if v.type == "name" and not token_encode_map[v.text] then
-            curnamefreq[v.text] = (curnamefreq[v.text] or 0) + 1
+            local code
+            for j, w in ipairs(namelist) do if w == v.text then code = j break end end
+            if code then
+                v.code = distcode(code)
+                namecodefreq[v.code.code] = (namecodefreq[v.code.code] or 0) + 1
+                table.insert(namelist, 1, table.remove(namelist, code))
+            else
+                v.code = distcode(0)
+                namecodefreq[0] = (namecodefreq[0] or 0) + 1
+                nametable[#nametable+1] = v.text
+                table.insert(namelist, 1, v.text)
+            end
         elseif v.type == "string" and not token_encode_map[v.text] then
             v.str = load("return " .. v.text, "=string", "t", {})()
             stringtable = stringtable .. v.str
-        elseif v.names then
-            local names = mktree(curnamefreq, namelist)
-            if curnametok then curnametok.names = names
-            else namefreq = names end
-            curnamefreq, curnametok, lasttok = {}, v, i
         end
     end
-    do
-        local names = mktree(curnamefreq, namelist)
-        if curnametok then curnametok.names = names
-        else namefreq = names end
-    end
+    --if curnametok then curnametok.names = {} end
+    local namecodelist = {}
+    for i = 0, 29 do namecodelist[#namecodelist+1] = {i, namecodefreq[i] or 0} end
+    local namecodetree = mktree(namecodefreq, namecodelist)
     -- write string-related data
     local out = bitstream()
     out.data = "\27LuzQ" .. LibDeflate:CompressDeflate(stringtable, {level = level})
@@ -219,8 +215,8 @@ local function compress(tokens, level)
     -- build and compress identifier list
     --varint(out, #namelist)
     local identstr = ""
-    for _, v in ipairs(namelist) do
-        for c in v[1]:gmatch "." do
+    for _, v in ipairs(nametable) do
+        for c in v:gmatch "." do
             identstr = identstr .. string.char(b64lut[c])
         end
         identstr = identstr .. "\63"
@@ -231,13 +227,12 @@ local function compress(tokens, level)
     local identlistsize = #out.data - strtblsize - 5
     -- write distance and initial identifier tree
     nametree(out, dist)
-    nametree(out, _nametree)
+    nametree(out, namecodetree)
     --nametree(out, namefreq)
     print(strtblsize, identlistsize, #out.data - identlistsize - strtblsize - 5, #namelist)
     -- write tokens
     local tokenbits, namebits, stringbits, numberbits, lzbits, treebits, numlz = 0, 0, 0, 0, 0, 0, 0
     -- local namemap = namefreq and namefreq.map
-    local namemap = _nametree.map
     for _, v in ipairs(tokens) do
         if token_encode_map[v.text] then
             out(token_encode_map[v.text].code, token_encode_map[v.text].bits)
@@ -246,10 +241,9 @@ local function compress(tokens, level)
             out(token_encode_map[":name"].code, token_encode_map[":name"].bits)
             tokenbits = tokenbits + token_encode_map[":name"].bits
             --print(v.text, namemap and namemap[v.text])
-            if namemap then
-                out(namemap[v.text].code, namemap[v.text].bits)
-                namebits = namebits + namemap[v.text].bits
-            end
+            out(namecodetree.map[v.code.code].code, namecodetree.map[v.code.code].bits)
+            out(v.code.extra, v.code.bits)
+            namebits = namebits + namecodetree.map[v.code.code].bits + v.code.bits
         elseif v.type == "string" then
             out(token_encode_map[":string"].code, token_encode_map[":string"].bits)
             tokenbits = tokenbits + token_encode_map[":string"].bits
@@ -268,12 +262,6 @@ local function compress(tokens, level)
             lzbits = lzbits + v.len.bits + dist.map[v.dist.code].bits + v.dist.bits
             numlz = numlz + 1
         else error("Could not find encoding for token " .. v.type .. "(" .. v.text .. ")!") end
-        if v.names then
-            local b = nametree(out, v.names)
-            --print(b / 8)
-            treebits = treebits + b
-            namemap = v.names and v.names.map
-        end
     end
     out(token_encode_map[":end"].code, token_encode_map[":end"].bits)
     out()

@@ -85,7 +85,7 @@ function ansencode.encodeSymbols(symbols, Ls, out, startPos, maxBlockSize)
     -- write out
     if out then
         out(nproc, 18)
-        print("Size of block:", bitcount + R)
+        print("Size of block:", bitcount + R, nproc)
         out(x - L, R)
         for i = #bitbuf, 1, -1 do out(bitbuf[i][1], bitbuf[i][2]) end
         return stop

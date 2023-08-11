@@ -33,12 +33,11 @@ local function generateDecodeTable(Ls)
     return decodingTable
 end
 
-local function ansdecode(readbits, nbits, decodingTable)
+local function ansdecode(readbits, nsym, decodingTable)
     local X, retval = readbits(decodingTable.R), {}
-    nbits = nbits - decodingTable.R
-    while nbits > 0 do
+    for i = 1, nsym do
         local t = decodingTable[X]
-        retval[#retval+1], X, nbits = t.symbol, t.newX + readbits(t.nbBits), nbits - t.nbBits
+        retval[#retval+1], X = t.symbol, t.newX + readbits(t.nbBits)
     end
     return retval
 end
@@ -58,9 +57,9 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
         else
             local Ls
             if readbits(1) == 1 then
-                local R, maxL = readbits(4), readbits(4)
-                Ls = {R = R}
                 if readbits(1) == 1 then
+                    local R, maxL = readbits(4), readbits(4)
+                    Ls = {R = R}
                     if readbits(1) == 1 then
                         local nRange = readbits(5)
                         for _ = 1, nRange do
@@ -72,17 +71,17 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
                         for _ = 1, nSym do Ls[#Ls+1] = {symbolMap[readbits(nBits)], readbits(maxL)} end
                     end
                 else
-                    local bitlen, bitidx, maxs = {}, 0, readbits(12)
-                    while bitidx < maxs do
+                    local bitlen, bitidx, maxs = {}, 0, readbits(9)
+                    while bitidx <= maxs do
                         if readbits(1) == 1 then
-                            local n, c = readbits(3) + 2, readbits(4)
+                            local n, c = readbits(3) + 2, readbits(5)
                             for _ = 1, n do
-                                if c > 0 then bitlen[#bitlen+1] = {symbolMap[bitidx], 2^c} end
+                                if c > 0 then bitlen[#bitlen+1] = {symbolMap[bitidx], 2^(R-c)} end
                                 bitidx = bitidx + 1
                             end
                         else
-                            local l = readbits(4)
-                            if l > 0 then bitlen[#bitlen+1] = {symbolMap[bitidx], 2^l} end
+                            local l = readbits(5)
+                            if l > 0 then bitlen[#bitlen+1] = {symbolMap[bitidx], 2^(R-l)} end
                             bitidx = bitidx + 1
                         end
                     end
@@ -92,8 +91,8 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
                 if not defaultLs then error("invalid file (dictionary required but not supplied)", 2) end
                 Ls = defaultLs
             end
-            local decodingTable, ansbits = generateDecodeTable(Ls), readbits(18)
-            local ansdata, codetree = ansdecode(readbits, ansbits, decodingTable)
+            local decodingTable, anssyms = generateDecodeTable(Ls), readbits(18)
+            local ansdata, codetree = ansdecode(readbits, anssyms, decodingTable)
             if readbits(1) == 1 then
                 local bitlen, bitidx = {}, 0
                 while bitidx < 30 do

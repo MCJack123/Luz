@@ -58,7 +58,7 @@ local function ansdecode(readbits, nsym, decodingTable)
     for i = 1, nsym do
         local t = decodingTable[X]
         retval[i] = t.symbol
-        --print(t.symbol, X, nbits)
+        print(t.symbol, X, i)
         --readbits()
         --if nbits == 0 then break end
         X = t.newX + readbits(t.nbBits)
@@ -125,14 +125,14 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
                             local n, c = readbits(3) + 2, readbits(5)
                             for _ = 1, n do
                                 --print(c)
-                                if c > 0 then bitlen[#bitlen+1] = {symbolMap[bitidx], 2^c} end
+                                if c > 0 then bitlen[#bitlen+1] = {symbolMap[bitidx], 2^(R-c)} end
                                 --print(bitidx)
                                 bitidx = bitidx + 1
                             end
                         else
                             local l = readbits(5)
                             --print(l)
-                            if l > 0 then bitlen[#bitlen+1] = {symbolMap[bitidx], 2^l} end
+                            if l > 0 then bitlen[#bitlen+1] = {symbolMap[bitidx], 2^(R-l)} end
                             bitidx = bitidx + 1
                         end
                     end

@@ -240,10 +240,10 @@ local function number(stream)
     end
 end
 
-local rlemap = {2, 6, 22, 86, 342, 1366, 5462}
+local rlemap = {2, 6, 22}
 
 local function readrle(stream, len)
-    local bits = getBitsR(stream, 3)
+    local bits = getBitsR(stream, 2)
     if bits == 0 then return 1, getBitsR(stream, len) end
     local rep = getBitsR(stream, bits * 2) + rlemap[bits]
     return rep, getBitsR(stream, len)

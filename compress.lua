@@ -123,16 +123,12 @@ local function nametree(out, names)
     local c, n = lengths[1], 0
     local num, nonzero = 1, 0
     for _, v in ipairs(lengths) do
-        if v ~= c or n == 21845 then
+        if v ~= c or n == 85 then
             --print(n, c)
-            if n > 5461 then out(7, 3) out(n - 5462, 14) bits = bits + 17 + names.maxlen
-            elseif n > 1365 then out(6, 3) out(n - 1366, 12) bits = bits + 15 + names.maxlen
-            elseif n > 341 then out(5, 3) out(n - 342, 10) bits = bits + 13 + names.maxlen
-            elseif n > 85 then out(4, 3) out(n - 86, 8) bits = bits + 11 + names.maxlen
-            elseif n > 21 then out(3, 3) out(n - 22, 6) bits = bits + 9 + names.maxlen
-            elseif n > 5 then out(2, 3) out(n - 6, 4) bits = bits + 7 + names.maxlen
-            elseif n > 1 then out(1, 3) out(n - 2, 2) bits = bits + 5 + names.maxlen
-            else out(0, 3) bits = bits + 3 + names.maxlen end
+            if n > 21 then out(3, 2) out(n - 22, 6) bits = bits + 9 + names.maxlen
+            elseif n > 5 then out(2, 2) out(n - 6, 4) bits = bits + 7 + names.maxlen
+            elseif n > 1 then out(1, 2) out(n - 2, 2) bits = bits + 5 + names.maxlen
+            else out(0, 2) bits = bits + 3 + names.maxlen end
             out(c, names.maxlen)
             c, n = v, 0
             num = num + 1
@@ -141,14 +137,10 @@ local function nametree(out, names)
         n = n + 1
     end
     --print(n, c)
-    if n > 5461 then out(7, 3) out(n - 5462, 14) bits = bits + 17 + names.maxlen
-    elseif n > 1365 then out(6, 3) out(n - 1366, 12) bits = bits + 15 + names.maxlen
-    elseif n > 341 then out(5, 3) out(n - 342, 10) bits = bits + 13 + names.maxlen
-    elseif n > 85 then out(4, 3) out(n - 86, 8) bits = bits + 11 + names.maxlen
-    elseif n > 21 then out(3, 3) out(n - 22, 6) bits = bits + 9 + names.maxlen
-    elseif n > 5 then out(2, 3) out(n - 6, 4) bits = bits + 7 + names.maxlen
-    elseif n > 1 then out(1, 3) out(n - 2, 2) bits = bits + 5 + names.maxlen
-    else out(0, 3) bits = bits + 3 + names.maxlen end
+    if n > 21 then out(3, 2) out(n - 22, 6) bits = bits + 9 + names.maxlen
+    elseif n > 5 then out(2, 2) out(n - 6, 4) bits = bits + 7 + names.maxlen
+    elseif n > 1 then out(1, 2) out(n - 2, 2) bits = bits + 5 + names.maxlen
+    else out(0, 2) bits = bits + 3 + names.maxlen end
     out(c, names.maxlen)
     if c > 1 then nonzero = nonzero + 1 end
     --print(bits / 8, names.maxlen, num, nonzero)

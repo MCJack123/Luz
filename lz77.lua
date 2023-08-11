@@ -7,7 +7,7 @@ end
 local math_min = math.min
 
 local function lz77(tokens, maxdist)
-    maxdist = math_min(maxdist or 1024, 32768)
+    maxdist = math_min(maxdist or 1024, 65536)
     local retval = {}
     local lookback = {}
     local i = 1

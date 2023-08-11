@@ -106,6 +106,8 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out, maxBlock
         -- extract probabilities
         local freq = {}
         local lzcodes = {}
+        local defaultMap = {}
+        for _, v in ipairs(defaultLs) do defaultMap[v[1]] = true end
         for i = start, math.min(#symbols, start + 262143) do
             local s = symbols[i]
             if type(s) == "table" then
@@ -114,6 +116,7 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out, maxBlock
                 s = symbols[i]
             end
             freq[s] = (freq[s] or 0) + 1
+            if defaultLs and not defaultMap[s] then defaultLs = nil end
         end
         if next(freq, next(freq)) == nil then
             -- only one symbol; force RLE
@@ -201,7 +204,7 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out, maxBlock
         else
             -- compute distance tree
             local distlist = {}
-            for i = 0, 29 do distlist[i+1] = {i, distfreq[i] or 0} end
+            for i = 0, 31 do distlist[i+1] = {i, distfreq[i] or 0} end
             local dist = {}
             dist.map, dist.lengths = maketree(distlist)
             local distsize = 0
@@ -210,7 +213,7 @@ local function blockcompress(symbols, nBits, defaultLs, symbolMap, out, maxBlock
                 out(1, 1)
                 local c, n = dist.lengths[1], 0
                 --print(dist.lengths[1])
-                for i = 2, 30 do
+                for i = 2, 32 do
                     --print(dist.lengths[i])
                     if c ~= dist.lengths[i] or n == 8 then
                         if n == 0 then

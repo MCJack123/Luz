@@ -3,7 +3,11 @@ local all_frequencies = require "all_frequencies"
 local blockcompress = require "blockcompress"
 
 local tokenlut = {}
-for i, v in ipairs(all_frequencies) do tokenlut[v[1]] = i-1 end
+for i = 0, 255 do tokenlut[i] = i end
+for i = 0, 31 do tokenlut[":repeat" .. i] = i + 256 end
+local starttoken
+for i, v in ipairs(all_frequencies) do if type(v[1]) == "string" and not v[1]:match "^:repeat" then starttoken = i break end end
+for i = starttoken, #all_frequencies do tokenlut[all_frequencies[i][1]] = i - starttoken + 288 end
 
 local function round(n) return math.floor(n + 0.5) end
 
@@ -73,6 +77,7 @@ local function compress(tokens, level)
             end
         end
     end
+    print("Initial tokens:", #newtok)
     -- run LZ77 on the table
     local symbols = lz77(newtok, maxdist)
     local out = bitstream()

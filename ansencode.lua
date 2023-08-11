@@ -95,75 +95,47 @@ function ansencode.encodeSymbols(symbols, Ls, out, startPos, maxBlockSize)
 end
 
 function ansencode.encodeDictionary(Ls, symbolMap, nBits, out)
-    if out then out(Ls.R, 5) end
-    -- calculate ranges
-    local rangeList = {}
+    -- calculate size
     local maxL = 0
     for i, v in ipairs(Ls) do
-        rangeList[i] = symbolMap[v[1]]
         maxL = math_max(maxL, v[2])
     end
     maxL = math_max(math_floor(log2(maxL) + 1), 1)
-    local Lssize = 0
+    local listSize = nBits + 8
+    local totalL = 2^Ls.R - 1
+    local lastn = -1
     for _, v in ipairs(Ls) do
-        if v[2] < 2^math.floor(maxL/2) then Lssize = Lssize + math.floor(maxL/2)
-        else Lssize = Lssize + maxL end
+        local nbits = math.min(select(2, math_frexp(totalL)), maxL)
+        if v[2] < 2^math.floor(nbits/2) then listSize = listSize + math.floor(nbits/2) + 2
+        else listSize = listSize + nbits + 2 end
+        if symbolMap[v[1]] - lastn ~= 1 then listSize = listSize + nBits end
+        lastn = symbolMap[v[1]]
+        totalL = totalL - v[2]
     end
-    local listSize = nBits + #Ls * nBits + Lssize
-    if out then out(maxL, 5) end
-    local ranges = {}
-    local curRangeMin, curRangeMax = rangeList[1], rangeList[1]
-    for i = 2, #rangeList do
-        if rangeList[i] ~= curRangeMax + 1 then
-            ranges[#ranges+1] = {curRangeMin, curRangeMax}
-            curRangeMin = rangeList[i]
-        end
-        curRangeMax = rangeList[i]
-    end
-    ranges[#ranges+1] = {curRangeMin, curRangeMax}
-    local rangeSize = 8 + #ranges * nBits * 2 + Lssize
-    if rangeSize < listSize and #ranges < 256 then
-        -- encode range-based dictionary
-        if not out then return rangeSize + 5 end
-        print("Dictionary size:", rangeSize + 5, "(range)", Ls.R, maxL)
-        out(1, 1)
-        out(#ranges, 8)
-        for _, v in ipairs(ranges) do
-            out(v[1], nBits)
-            out(v[2], nBits)
-            --print(v[1], v[2])
-            for i = v[1], v[2] do
-                local found = false
-                for _, p in ipairs(Ls) do if symbolMap[p[1]] == i then
-                    if p[2] < 2^math.floor(maxL/2) then
-                        out(0, 1)
-                        out(p[2], math.floor(maxL/2))
-                    else
-                        out(1, 1)
-                        out(p[2], maxL)
-                    end
-                    found = true
-                    break
-                end end
-                if not found then error("did not find entry for " .. i) end
-            end
-        end
-    else
-        -- encode list-based dictionary
-        if not out then return listSize + 5 end
-        print("Dictionary size:", listSize + 5, "(list)", Ls.R, maxL)
-        out(0, 1)
-        out(#Ls - 1, nBits)
-        for _, v in ipairs(Ls) do
+    -- encode list-based dictionary
+    if not out then return listSize + 8 end
+    out(Ls.R - 5, 4)
+    out(maxL - 5, 4)
+    out(#Ls, nBits)
+    print("Dictionary size:", listSize + 8, "(ANS)", Ls.R)
+    totalL = 2^Ls.R - 1
+    lastn = -1
+    for _, v in ipairs(Ls) do
+        local nbits = math.min(select(2, math_frexp(totalL)), maxL)
+        if symbolMap[v[1]] - lastn ~= 1 then
+            out(1, 1)
             out(symbolMap[v[1]], nBits)
-            if v[2] < 2^math.floor(maxL/2) then
-                out(0, 1)
-                out(v[2], math.floor(maxL/2))
-            else
-                out(1, 1)
-                out(v[2], maxL)
-            end
+        else out(0, 1) end
+        --print(nbits, v[2], totalL)
+        if v[2] < 2^math.floor(nbits/2) then
+            out(0, 1)
+            out(v[2], math.floor(nbits/2))
+        else
+            out(1, 1)
+            out(v[2], nbits)
         end
+        totalL = totalL - v[2]
+        lastn = symbolMap[v[1]]
     end
 end
 

@@ -58,17 +58,17 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
             local Ls
             if readbits(1) == 1 then
                 if readbits(1) == 1 then
-                    local R, maxL = readbits(4), readbits(4)
+                    local R, maxL, numEnt = readbits(4) + 5, readbits(4) + 5, readbits(nBits)
                     Ls = {R = R}
-                    if readbits(1) == 1 then
-                        local nRange = readbits(5)
-                        for _ = 1, nRange do
-                            local low, high = readbits(nBits), readbits(nBits)
-                            for j = low, high do Ls[#Ls+1] = {symbolMap[j], readbits(maxL)} end
-                        end
-                    else
-                        local nSym = readbits(nBits) + 1
-                        for _ = 1, nSym do Ls[#Ls+1] = {symbolMap[readbits(nBits)], readbits(maxL)} end
+                    local totalL, lastn = 2^R - 1, -1
+                    for _ = 1, numEnt do
+                        local _, e, sym = math_frexp(totalL)
+                        local nbits, n = math.min(e, maxL)
+                        if readbits(1) == 1 then sym = readbits(nBits)
+                        else sym = lastn + 1 end
+                        if readbits(1) == 1 then n = readbits(nbits)
+                        else n = readbits(math.floor(nbits/2)) end
+                        Ls[#Ls+1], totalL, lastn = {symbolMap[sym], n}, totalL - n, sym
                     end
                 else
                     local bitlen, bitidx, maxs = {}, 0, readbits(9)
@@ -186,7 +186,7 @@ local function decompress(data)
     if data:sub(1, 5) ~= "\27LuzA" then error("invalid format", 2) end
     local readbits = makeReader(data:sub(6))
     readbits(1)
-    local tokentab, tokens, partial, ptype = blockdecompress(readbits, 7, all_frequencies, tokenlut), {}
+    local tokentab, tokens, partial, ptype = blockdecompress(readbits, 9, all_frequencies, tokenlut), {}
     for _, node in ipairs(tokentab) do
         if type(node) == "number" then
             partial = partial .. string.char(node)

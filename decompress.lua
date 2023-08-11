@@ -58,7 +58,7 @@ local function ansdecode(readbits, nsym, decodingTable)
     for i = 1, nsym do
         local t = decodingTable[X]
         retval[i] = t.symbol
-        print(t.symbol, X, i)
+        --print(t.symbol, X, i)
         --readbits()
         --if nbits == 0 then break end
         X = t.newX + readbits(t.nbBits)
@@ -93,25 +93,25 @@ local function blockdecompress(readbits, nBits, defaultLs, symbolMap)
                 -- dynamic dictionary
                 if readbits(1) == 1 then
                     -- ANS dictionary
-                    local R = readbits(5)
-                    local maxL = readbits(5)
-                    --print(R)
+                    local R = readbits(4) + 5
+                    local maxL = readbits(4) + 5
+                    local numEnt = readbits(nBits)
+                    --print(R, maxL, numEnt)
                     Ls = {R = R}
-                    if readbits(1) == 1 then
-                        -- range-based dictionary
-                        --print("range")
-                        --readbits()
-                        local nRange = readbits(5)
-                        for i = 1, nRange do
-                            local low, high = readbits(nBits), readbits(nBits)
-                            --print(low, high)
-                            for j = low, high do Ls[#Ls+1] = {symbolMap[j], readbits(maxL)} end
-                        end
-                    else
-                        -- list-based dictionary
-                        --print("list")
-                        local nSym = readbits(nBits) + 1
-                        for i = 1, nSym do Ls[#Ls+1] = {symbolMap[readbits(nBits)], readbits(maxL)} end
+                    local totalL = 2^R - 1
+                    local lastn = -1
+                    for _ = 1, numEnt do
+                        local sym
+                        if readbits(1) == 1 then sym = readbits(nBits)
+                        else sym = lastn + 1 end
+                        local _, e = math_frexp(totalL)
+                        local nbits, n = math.min(e, maxL)
+                        if readbits(1) == 1 then n = readbits(nbits)
+                        else n = readbits(math.floor(nbits/2)) end
+                        Ls[#Ls+1] = {symbolMap[sym], n}
+                        totalL = totalL - n
+                        lastn = sym
+                        --assert(totalL >= 0)
                     end
                 else
                     -- Huffman dictionary
@@ -263,7 +263,7 @@ local function decompress(data)
     local readbits = makeReader(data:sub(6))
     readbits(1)
     -- read symbols
-    local tokentab = blockdecompress(readbits, 7, all_frequencies, tokenlut)
+    local tokentab = blockdecompress(readbits, 9, all_frequencies, tokenlut)
     -- read tokens
     local tokens, partial, ptype = {}
     for _, node in ipairs(tokentab) do

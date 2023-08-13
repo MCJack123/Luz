@@ -18,6 +18,8 @@ end
 local function bitstream()
     return setmetatable({data = "", partial = 0, len = 0}, {__call = function(self, bits, len)
         if not bits then bits, len = 0, 8 - self.len end
+        if len == 0 then return end
+        assert(bits < 2^len)
         self.partial = bit32.bor(bit32.lshift(self.partial, len), bits)
         self.len = self.len + len
         while self.len >= 8 do
@@ -59,7 +61,7 @@ local function nametree(out, names)
         if out then out(0, 5) end
         return 5
     elseif names.idx then
-        if out then out(1, 5) end
+        if out then out(0, 4) out(1, 1) end
         return varint(out, names.idx - 1) + 5
     end
     --[=[
@@ -71,20 +73,19 @@ local function nametree(out, names)
     --[[]=]
     local lengths = names.lengths
     --local lengths = moveToFront(names.lengths, names.maxlen)
-    names.maxlen = select(2, math.frexp(names.maxlen))
+    local maxlen = select(2, math.frexp(names.maxlen))
     --]]
-    if out then out(names.maxlen, 4) end
+    if out then out(maxlen, 4) end
     local bits = 4
     local c, n = lengths[1], 0
     local num, nonzero = 1, 0
     for _, v in ipairs(lengths) do
         if v ~= c or n == 85 then
-            --print(n, c)
-            if n > 21 then if out then out(3, 2) out(n - 22, 6) end bits = bits + 8 + names.maxlen
-            elseif n > 5 then if out then out(2, 2) out(n - 6, 4) end bits = bits + 6 + names.maxlen
-            elseif n > 1 then if out then out(1, 2) out(n - 2, 2) end bits = bits + 4 + names.maxlen
-            else if out then out(0, 2) end bits = bits + 2 + names.maxlen end
-            if out then out(c, names.maxlen) end
+            if n > 21 then if out then out(3, 2) out(n - 22, 6) end bits = bits + 8 + maxlen
+            elseif n > 5 then if out then out(2, 2) out(n - 6, 4) end bits = bits + 6 + maxlen
+            elseif n > 1 then if out then out(1, 2) out(n - 2, 2) end bits = bits + 4 + maxlen
+            else if out then out(0, 2) end bits = bits + 2 + maxlen end
+            if out then out(c, maxlen) end
             c, n = v, 0
             num = num + 1
             if c > 1 then nonzero = nonzero + 1 end
@@ -92,11 +93,11 @@ local function nametree(out, names)
         n = n + 1
     end
     --print(n, c)
-    if n > 21 then if out then out(3, 2) out(n - 22, 6) end bits = bits + 8 + names.maxlen
-    elseif n > 5 then if out then out(2, 2) out(n - 6, 4) end bits = bits + 6 + names.maxlen
-    elseif n > 1 then if out then out(1, 2) out(n - 2, 2) end bits = bits + 4 + names.maxlen
-    else if out then out(0, 2) end bits = bits + 2 + names.maxlen end
-    if out then out(c, names.maxlen) end
+    if n > 21 then if out then out(3, 2) out(n - 22, 6) end bits = bits + 8 + maxlen
+    elseif n > 5 then if out then out(2, 2) out(n - 6, 4) end bits = bits + 6 + maxlen
+    elseif n > 1 then if out then out(1, 2) out(n - 2, 2) end bits = bits + 4 + maxlen
+    else if out then out(0, 2) end bits = bits + 2 + maxlen end
+    if out then out(c, maxlen) end
     if c > 1 then nonzero = nonzero + 1 end
     --print(bits / 8, names.maxlen, num, nonzero)
     return bits
@@ -108,10 +109,10 @@ local function mktree(freq, namelist)
     names.map, names.lengths = maketree(names.list)
     if not names.map then
         if names.map == nil then return nil
-        elseif names.map == false then return {idx = names.lengths} end
+        elseif names.map == false then return {idx = names.lengths, map = {[namelist[names.lengths][1]] = {code = 0, bits = 0, extra = 0}}} end
     end
     names.maxlen = 0
-    for _, w in ipairs(names.lengths) do names.maxlen = math.max(names.maxlen, w) end
+    for _, w in pairs(names.lengths) do names.maxlen = math.max(names.maxlen, w) end
     return names
 end
 
@@ -155,14 +156,14 @@ local function compress(tokens, level)
     for i = 0, 29 do namecodelist[#namecodelist+1] = {i, namecodefreq[i] or 0} end
     local namecodetree = mktree(namecodefreq, namecodelist)
     -- generate custom dictionary & compare sizes
-    local freq = {}
+    local freq = {[":end"] = 1}
     for _, v in ipairs(tokens) do
         if token_encode_map[v.text] then freq[v.text] = (freq[v.text] or 0) + 1
         else freq[":" .. v.type] = (freq[":" .. v.type] or 0) + 1 end
     end
-    local tokenlist = {{":name", 0}, {":string", 0}, {":number", 0}}
-    for i = 0, 29 do tokenlist[#tokenlist+1] = {":repeat" .. i, 0} end
-    for k in pairs(token_encode_map) do tokenlist[#tokenlist+1] = {k, 0} end
+    local tokenlist = {}
+    for i = 0, 29 do if not token_encode_map[":repeat" .. i] then tokenlist[#tokenlist+1] = {":repeat" .. i, freq[":repeat" .. i] or 0} end end
+    for k in pairs(token_encode_map) do tokenlist[#tokenlist+1] = {k, freq[k] or 0} end
     table.sort(tokenlist, function(a, b) return a[1] < b[1] end)
     local customtree = mktree(freq, tokenlist)
     local dynamicSize, staticSize = nametree(nil, customtree), 0
@@ -249,7 +250,7 @@ local function compress(tokens, level)
             numlz = numlz + 1
         else error("Could not find encoding for token " .. v.type .. "(" .. v.text .. ")!") end
     end
-    out(token_encode_map[":end"].code, token_encode_map[":end"].bits)
+    out(tokenmap[":end"].code, tokenmap[":end"].bits)
     out()
     tokenbits = tokenbits + token_encode_map[":end"].bits
     print(tokenbits / 8, namebits / 8, stringbits / 8, numberbits / 8, lzbits / 8, treebits / 8, numlz)

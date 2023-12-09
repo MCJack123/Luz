@@ -1,0 +1,37 @@
+# ':' indicates a state
+# '`x`' indicates a literal token x
+# '[]' indicates one or more (array)
+# '!' terminates an array
+# '``' indicates nothing (used for terminating an array)
+# :Name, :String, :Number are literals from the name/string tables/number bits
+
+root = :block
+:block = [:assign | :call | :label | `break` | :goto | :do | :while | :repeat | :if | :forrange | :foriter | :function | :localfunc | :local | :return | !``]
+:assign = :var [(`,` :var) | !`=`] :exp [(`,` :exp) | !``]
+:call = (:prefixexp :args) | (:prefixexp `:` :Name :args)
+:label = `::` :Name `::`
+:goto = `goto` :Name
+:do = `do` :block `end`
+:while = `while` :exp `do` :block `end`
+:repeat = `repeat` :block `until` :exp
+:if = `if` :exp `then` :block [(`elseif` :exp `then` :block) | !(`else` :block `end`) | !`end`]
+:forrange = `for` :Name `=` :exp `,` :exp ((`,` :exp `do` :block `end`) | (`do` :block `end`))
+:foriter = `for` :Name [(`,` :Name) | !`in`] :exp [`,` :exp | !`do`] :block `end`
+:function = `function` :Name [(`.` :Name) | !(`:` :Name :funcbody) | !:funcbody]
+:localfunc = `local` `function` :Name :funcbody
+:local = `local` :Name [(`,` :Name) | !``] ((`=` :exp [(`,` :exp) | !``]) | ``)
+:return = `return` ((:exp [(`,` :exp) | !``]) | ``)
+:var = :Name | (:prefixexp `[` :exp `]`) | (:prefixexp `.` :Name)
+:prefixexp = :var | :call | (`(` :exp `)`)
+:args = (`(` ((:exp [(`,` :exp) | !`)`]) | `)`)) | :table | :String
+:funcbody = `(` (`)` | (`...` `)`) | (:Name [(`,` :Name) | !``] ((`,` `...` `)`) | `)`))) :block `end`
+:exp = `nil` | `false` | `true` | :Number | :String | `...` | (`function` :funcbody) | :prefixexp | :table | (:exp :binop :exp) | (:unop :exp)
+:binop = ‘+’ | ‘-’ | ‘*’ | ‘/’ | ‘^’ | ‘%’ | ‘..’ | ‘<’ | ‘<=’ | ‘>’ | ‘>=’ | ‘==’ | ‘~=’ | `and` | `or`
+:unop = `-` | `not` | `#`
+:table = `{` [(((`[` :exp `]` `=` :exp) | (:Name `=` :exp) | :exp) `,`) | !(((`[` :exp `]` `=` :exp) | (:Name `=` :exp) | :exp) `}`) | !`}`] # ; -> , for efficiency
+
+# LZ repetitions stored in table at front of file: stores bit position (as delta from last), distance, and length
+# when repetition found, the previous bits are inserted into the stream ahead of the read pointer, then read normally
+
+# unions with two options should be stored as 1 bit
+# store :block, :exp, :binop as Huffman code?

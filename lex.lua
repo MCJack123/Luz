@@ -35,6 +35,7 @@ local keywords = {
     ["end"] = true,
     ["for"] = true,
     ["function"] = true,
+    ["goto"] = true,
     ["if"] = true,
     ["in"] = true,
     ["local"] = true,

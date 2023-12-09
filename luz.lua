@@ -54,9 +54,9 @@ elseif mode == 2 then
 else
     output = output or (input .. ".luz")
     assert((canload and load or loadstring)(data))
-    local tokens = lex(data, 1, 2)
+    local tokens = lex(data, 2, 2)
     if min then tokens = minify(tokens) end
-    local compressed = compress(tokens)
+    local compressed = compress(tokens, input)
     file = assert(io.open(output, "wb"))
     file:write(compressed)
     file:close()

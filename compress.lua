@@ -1,6 +1,5 @@
 local LibDeflate = require "LibDeflate"
-local maketree = require "maketree"
-local token_encode_map = require "token_encode_map"
+local parse = require "parse"
 
 local b64str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
 local b64lut = {}
@@ -45,50 +44,22 @@ local function number(out, num)
     end
 end
 
-local function compress(tokens)
-    local namefreq, stringtable = {}, ""
-    -- generate identifier tree and string table
-    for _, v in ipairs(tokens) do
-        if v.type == "name" and not token_encode_map[v.text] then
-            namefreq[v.text] = (namefreq[v.text] or 0) + 1
-        elseif v.type == "string" and not token_encode_map[v.text] then
-            v.str = load("return " .. v.text, "=string", "t", {})()
-            stringtable = stringtable .. v.str
-        end
-    end
-    local namelist = {}
-    for k, v in pairs(namefreq) do namelist[#namelist+1] = {k, v} end
-    local namemap, namelengths, nametree = maketree(namelist)
-    local maxnamelen = 0
-    for _, v in ipairs(namelengths) do maxnamelen = math.max(maxnamelen, v) end
+local function compress(tokens, filename)
+    -- parse data
+    local p = parse(tokens, filename)
+    --require "syntree"(p)
     -- write string-related data
     local out = bitstream()
-    out.data = "\27LuzQ" .. LibDeflate:CompressDeflate(stringtable)
-    --print(#namelist)
-    varint(out, #namelist)
-    for _, v in ipairs(namelist) do
-        for c in v[1]:gmatch "." do out(b64lut[c], 6) end
+    out.data = "\27LuzR" .. LibDeflate:CompressDeflate(p.stringtable)
+    varint(out, #p.names)
+    for _, v in ipairs(p.names) do
+        for c in v:gmatch "." do out(b64lut[c], 6) end
         out(63, 6)
     end
-    maxnamelen = select(2, math.frexp(maxnamelen))
-    out(maxnamelen, 4)
-    for _, v in ipairs(namelengths) do out(v, maxnamelen) end
-    -- write tokens
-    for _, v in ipairs(tokens) do
-        if token_encode_map[v.text] then
-            out(token_encode_map[v.text].code, token_encode_map[v.text].bits)
-        elseif v.type == "name" then
-            out(token_encode_map[":name"].code, token_encode_map[":name"].bits)
-            out(namemap[v.text].code, namemap[v.text].bits)
-        elseif v.type == "string" then
-            out(token_encode_map[":string"].code, token_encode_map[":string"].bits)
-            varint(out, #v.str)
-        elseif v.type == "number" then
-            out(token_encode_map[":number"].code, token_encode_map[":number"].bits)
-            number(out, tonumber(v.text))
-        else error("Could not find encoding for token " .. v.type .. "(" .. v.text .. ")!") end
-    end
-    out(token_encode_map[":end"].code, token_encode_map[":end"].bits)
+    -- write bitstream
+    local file = fs.open("luz/test-bits.txt", "w")
+    for _, v in ipairs(p.bits) do out(v[1], v[2]) file.writeLine(v[1] .. "\t" .. v[2]) end
+    file.close()
     out()
     return out.data
 end

@@ -1,34 +1,42 @@
 # ':' indicates a state
 # '`x`' indicates a literal token x
 # '[]' indicates one or more (array)
+# '{n}' indicates n slots are taken, which reduces the bits used by the token
 # '!' terminates an array
 # '``' indicates nothing (used for terminating an array)
 # :Name, :String, :Number are literals from the name/string tables/number bits
 
 root = :block
-:block = [:assign | :call | :label | `break` | :goto | :do | :while | :repeat | :if | :forrange | :foriter | :function | :localfunc | :local | :return | !``]
+:block = [:assign | :call | :label | `break` | :goto | :do | :while | :repeat | :if | :forrange | :foriter | :function | :localfunc | :local | :return | !`` | :assign1 | :local1 | !:return1]
 :assign = :var [(`,` :var) | !`=`] :exp [(`,` :exp) | !``]
-:call = (:prefixexp :args) | (:prefixexp `:` :Name :args)
+:assign1 = :var `=` :exp
+:call = :prefixexp
 :label = `::` :Name `::`
 :goto = `goto` :Name
 :do = `do` :block `end`
 :while = `while` :exp `do` :block `end`
 :repeat = `repeat` :block `until` :exp
-:if = `if` :exp `then` :block [(`elseif` :exp `then` :block) | !(`else` :block `end`) | !`end`]
+:if = `if` :exp `then` :block [!`end`{2} | (`elseif` :exp `then` :block) | !(`else` :block `end`)]
 :forrange = `for` :Name `=` :exp `,` :exp ((`,` :exp `do` :block `end`) | (`do` :block `end`))
 :foriter = `for` :Name [(`,` :Name) | !`in`] :exp [`,` :exp | !`do`] :block `end`
-:function = `function` :Name [(`.` :Name) | !(`:` :Name :funcbody) | !:funcbody]
+:function = `function` :Name [!:funcbody{2} | (`.` :Name) | !(`:` :Name :funcbody)]
 :localfunc = `local` `function` :Name :funcbody
-:local = `local` :Name [(`,` :Name) | !``] ((`=` :exp [(`,` :exp) | !``]) | ``)
+:local = `local` :Name [!(`=` :exp [(`,` :exp) | !``]){2} | (`,` :Name) | !``]
+:local1 = `local` :Name `=` :exp
 :return = `return` ((:exp [(`,` :exp) | !``]) | ``)
-:var = :Name | (:prefixexp `[` :exp `]`) | (:prefixexp `.` :Name)
-:prefixexp = :var | :call | (`(` :exp `)`)
-:args = (`(` ((:exp [(`,` :exp) | !`)`]) | `)`)) | :table | :String
-:funcbody = `(` (`)` | (`...` `)`) | (:Name [(`,` :Name) | !``] ((`,` `...` `)`) | `)`))) :block `end`
-:exp = `nil` | `false` | `true` | :Number | :String | `...` | (`function` :funcbody) | :prefixexp | :table | (:exp :binop :exp) | (:unop :exp)
-:binop = ‘+’ | ‘-’ | ‘*’ | ‘/’ | ‘^’ | ‘%’ | ‘..’ | ‘<’ | ‘<=’ | ‘>’ | ‘>=’ | ‘==’ | ‘~=’ | `and` | `or`
-:unop = `-` | `not` | `#`
-:table = `{` [(((`[` :exp `]` `=` :exp) | (:Name `=` :exp) | :exp) `,`) | !(((`[` :exp `]` `=` :exp) | (:Name `=` :exp) | :exp) `}`) | !`}`] # ; -> , for efficiency
+:return1 = `return` :exp
+:var = :Name [!``{2} | (`[` :exp `]`) | (`.` :Name)]
+:prefixexp = (:Name | (`(` :exp `)`)) [!``{8} | :args{4} | (`.` :Name){2} | (`[` :exp `]`) | (`:` :Name :args)]
+:args = (`(` ((:exp [(`,` :exp) | !`)`]) | `)`)){2} | :table | :String
+:funcbody = `(` ((:Name [(`,` :Name) | !``] ((`,` `...` `)`) | `)`)){2} | `)` | (`...` `)`)) :block `end`
+:exp = `nil` | `false` | `true` | :Number | :String | `...` | (`function` :funcbody) | :prefixexp | :table | (:exp :binop :exp) | (:unop :exp) | `0` | `1` | `2` | `-1` | :Name
+:binop = `+` | `-` | `*` | `/` | `^` | `%` | `..` | `<` | `<=` | `>` | `>=` | `==` | `~=` | `and` | `or`
+:unop = `#`{2} | `-` | `not`
+:table = `{` [
+    !((:exp{2} | (`[` :exp `]` `=` :exp) | (:Name `=` :exp)) `}`){2} |
+    ((:exp{2} | (`[` :exp `]` `=` :exp) | (:Name `=` :exp)) `,`) |
+    !`}`
+] # ; -> , for efficiency
 
 # LZ repetitions stored in table at front of file: stores bit position (as delta from last), distance, and length
 # when repetition found, the previous bits are inserted into the stream ahead of the read pointer, then read normally

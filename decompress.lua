@@ -1,5 +1,3 @@
-local token_decode_tree = require "token_decode_tree"
-
 local rshift, lshift, band = bit32.rshift, bit32.lshift, bit32.band
 local byte, char = string.byte, string.char
 local concat, unpack = table.concat, unpack or table.unpack
@@ -65,25 +63,31 @@ end
 -- syntax trees
 
 local function varint(read)
-    local num = 0
-    repeat
-        local n = read(8)
-        num = num * 128 + n % 128
-    until n < 128
-    return num
+    if read(1, true) == 1 then
+        local num = 0
+        repeat
+            local n = read(8, true)
+            num = num * 128 + n % 128
+        until n < 128
+        return num
+    else
+        return read(4, true)
+    end
 end
 
 local function number(read)
-    local type = read(2)
+    local type = read(2, true)
     if type >= 2 then
-        local esign = read(1)
+        local esign = read(1, true)
         local e = 0
         repeat
-            local n = read(4)
+            local n = read(4, true)
             e = bit32.lshift(e, 3) + bit32.band(n, 7)
         until n < 8
         if esign == 1 then e = -e end
-        local m = varint(read) / 0x20000000000000 + 0.5
+        local m
+        if read(1, true) == 1 then m = varint(read) / varint(read) + 0.5
+        else m = 0.5 end
         return math.ldexp(m, e) * (type == 2 and 1 or -1)
     else
         return varint(read) * (type == 0 and 1 or -1)
@@ -91,15 +95,15 @@ local function number(read)
 end
 
 local trees
-local function union(...)
+local function union(reader, ...)
     local args = {...}
     local bits = math.ceil(math.log(#args, 2))
-    return function(state, read, push) return args[read(bits)+1](state, read, push) end
+    return function(state, read, push) return args[reader(state, read, bits)+1](state, read, push) end
 end
-local function arr(...)
+local function arr(reader, ...)
     local args = {...}
     local bits = math.ceil(math.log(#args, 2))
-    return function(state, read, push) repeat local ok = args[read(bits)+1](state, read, push) until ok end
+    return function(state, read, push) repeat local ok = args[reader(state, read, bits)+1](state, read, push) until ok end
 end
 local function terminate(fn) return function(...) if fn then fn(...) end return true end end
 local function lit(name) return function(state, read, push) push(name) end end
@@ -108,9 +112,38 @@ local function seq(...)
     local args = {...}
     return function(state, read, push) for _, fn in ipairs(args) do fn(state, read, push) end end
 end
+local function rdr(state, read, bits) return read(bits, true) end
+local function huff(name, nostop) return function(state, read, bits)
+    local node = state.trees[name]
+    while type(node) == "table" do node = node[read(1) + 1] end
+    if not nostop then read(nil, true) end
+    --print(node)
+    return node
+end end
+local function huffcode(name)
+    local _huff = huff(name, true)
+    return function(state, read, bits)
+        local code = _huff(state, read)
+        local ebits = math.max(math.floor(code / 2) - 1, 0)
+        if ebits > 0 then
+            local extra = read(ebits, true)
+            return bit32.bor(extra, bit32.lshift(bit32.band(code, 1) + 2, ebits))
+        end
+        read(nil, true)
+        return code
+    end
+end
+local function weight(height) return function(state, read, bits)
+    local n = 0
+    for _ = 2, height do
+        if read(1) == 0 then read(nil, true) return n end
+        n = n + 1
+    end
+    return n + read(1, true)
+end end
+local namereader = huffcode(":Name")
 local function Name(state, read, push)
-    local id
-    if read(1) == 1 then id = read(12) + 64 else id = read(6) end
+    local id = namereader(state, read)
     if id == 0 then
         local name = state.names[state.namepos]
         state.namepos = state.namepos + 1
@@ -122,7 +155,13 @@ local function Name(state, read, push)
     end
 end
 local function String(state, read, push)
-    local len = read(8)
+    local code = read(5)
+    local ebits = math.max(math.floor(code / 2) - 1, 0)
+    local len = code
+    if ebits > 0 then
+        local extra = read(ebits, true)
+        len = bit32.bor(extra, bit32.lshift(bit32.band(code, 1) + 2, ebits))
+    else read(nil, true) end
     push(("%q"):format(state.stringtable:sub(state.stringpos, state.stringpos + len - 1)))
     state.stringpos = state.stringpos + len
 end
@@ -132,33 +171,35 @@ end
 
 local binops = {[0] = "+", "-", "*", "/", "^", "%", "..", "<", "<=", ">", ">=", "==", "~=", "and", "or"}
 trees = {
-    [":block"] = arr(
-        seq(ref ":var", arr(seq(lit ",", ref ":var"), terminate(lit "=")), ref ":exp", arr(seq(lit ",", ref ":exp"), terminate())), -- assign
-        ref ":call",
+    [":block"] = arr(huff ":block",
+        seq(ref ":var", arr(rdr, seq(lit ",", ref ":var"), terminate(lit "=")), ref ":exp", arr(rdr, seq(lit ",", ref ":exp"), terminate())), -- assign
+        ref ":prefixexp",
         seq(lit "::", Name, lit "::"), -- label
         lit "break",
         seq(lit "goto", Name), -- goto
         seq(lit "do", ref ":block", lit "end"), -- do/end
         seq(lit "while", ref ":exp", lit "do", ref ":block", lit "end"), -- while
         seq(lit "repeat", ref ":block", lit "until", ref ":exp"), -- repeat
-        seq(lit "if", ref ":exp", lit "then", ref ":block", arr(seq(lit "elseif", ref ":exp", lit "then", ref ":block"), terminate(seq(lit "else", ref ":block", lit "end")), terminate(lit "end"))), -- if
-        seq(lit "for", Name, lit "=", ref ":exp", lit ",", ref ":exp", union(seq(lit ",", ref ":exp", lit "do"), seq(lit "do")), ref ":block", lit "end"), -- for range
-        seq(lit "for", Name, arr(seq(lit ",", Name), terminate(lit "in")), ref ":exp", arr(seq(lit ",", ref ":exp"), terminate(lit "do")), ref ":block", lit "end"), -- for iter
-        seq(lit "function", Name, arr(seq(lit ".", Name), terminate(seq(lit ":", Name, ref ":funcbody")), terminate(ref ":funcbody"))), -- function statement
+        seq(lit "if", ref ":exp", lit "then", ref ":block", arr(weight(2), terminate(lit "end"), seq(lit "elseif", ref ":exp", lit "then", ref ":block"), terminate(seq(lit "else", ref ":block", lit "end")))), -- if
+        seq(lit "for", Name, lit "=", ref ":exp", lit ",", ref ":exp", union(rdr, seq(lit ",", ref ":exp", lit "do"), seq(lit "do")), ref ":block", lit "end"), -- for range
+        seq(lit "for", Name, arr(rdr, seq(lit ",", Name), terminate(lit "in")), ref ":exp", arr(rdr, seq(lit ",", ref ":exp"), terminate(lit "do")), ref ":block", lit "end"), -- for iter
+        seq(lit "function", Name, arr(weight(2), terminate(ref ":funcbody"), terminate(seq(lit ":", Name, ref ":funcbody")), seq(lit ".", Name))), -- function statement
         seq(lit "local", lit "function", Name, ref ":funcbody"), -- local function
-        seq(lit "local", Name, arr(seq(lit ",", Name), terminate()), union(seq(lit "=", ref ":exp", arr(seq(lit ",", ref ":exp"), terminate())), lit "")), -- local definition
-        union(seq(lit "return", ref ":exp", arr(seq(lit ",", ref ":exp"), terminate())), lit "return"),
-        terminate()
+        seq(lit "local", Name, arr(weight(2), terminate(seq(lit "=", ref ":exp", arr(rdr, seq(lit ",", ref ":exp"), terminate()))), seq(lit ",", Name), terminate())), -- local definition
+        union(rdr, seq(lit "return", ref ":exp", arr(rdr, seq(lit ",", ref ":exp"), terminate())), lit "return"),
+        terminate(lit ";"),
+        seq(ref ":var", lit "=", ref ":exp"),
+        seq(lit "local", Name, lit "=", ref ":exp"),
+        terminate(seq(lit "return", ref ":exp"))
     ),
-    [":call"] = union(seq(ref ":prefixexp", ref ":args"), seq(ref ":prefixexp", lit ":", Name, ref ":args")),
-    [":var"] = union(Name, seq(ref ":prefixexp", lit "[", ref ":exp", lit "]"), seq(ref ":prefixexp", lit ".", Name)),
-    [":prefixexp"] = union(ref ":var", ref ":call", seq(lit "(", ref ":exp", lit ")")),
-    [":args"] = union(seq(lit "(", union(seq(ref ":exp", arr(seq(lit ",", ref ":exp"), terminate(lit ")"))), lit ")")), ref ":table", String),
-    [":funcbody"] = seq(lit "(", union(lit ")", seq(lit "...", lit ")"), seq(Name, arr(seq(lit ",", Name), terminate()), union(seq(lit ",", lit "...", lit ")"), lit ")"))), ref ":block", lit "end"),
-    [":exp"] = union(lit "nil", lit "false", lit "true", Number, String, lit "...", seq(lit "function", ref ":funcbody"), ref ":prefixexp", ref ":table", seq(ref ":exp", ref ":binop", ref ":exp"), seq(ref ":unop", ref ":exp")),
-    [":binop"] = function(state, read, push) push(binops[read(4)]) end,
-    [":unop"] = union(lit "-", lit "not", lit "#"),
-    [":table"] = seq(lit "{", arr(seq(union(seq(lit "[", ref ":exp", lit "]", lit "=", ref ":exp"), seq(Name, lit "=", ref ":exp"), ref ":exp"), lit ","), terminate(seq(union(seq(lit "[", ref ":exp", lit "]", lit "=", ref ":exp"), seq(Name, lit "=", ref ":exp"), ref ":exp"), lit "}")), terminate(lit "}")))
+    [":var"] = seq(Name, arr(weight(2), terminate(), seq(lit "[", ref ":exp", lit "]"), seq(lit ".", Name))),
+    [":prefixexp"] = seq(union(rdr, Name, seq(lit "(", ref ":exp", lit ")")), arr(weight(4), terminate(), ref ":args", seq(lit ".", Name), seq(lit "[", ref ":exp", lit "]"), seq(lit ":", Name, ref ":args"))),
+    [":args"] = union(weight(2), seq(lit "(", union(rdr, seq(ref ":exp", arr(rdr, seq(lit ",", ref ":exp"), terminate(lit ")"))), lit ")")), ref ":table", String),
+    [":funcbody"] = seq(lit "(", union(weight(2), seq(Name, arr(rdr, seq(lit ",", Name), terminate()), union(rdr, seq(lit ",", lit "...", lit ")"), lit ")")), lit ")", seq(lit "...", lit ")")), ref ":block", lit "end"),
+    [":exp"] = union(huff ":exp", lit "nil", lit "false", lit "true", Number, String, lit "...", seq(lit "function", ref ":funcbody"), ref ":prefixexp", ref ":table", seq(ref ":exp", ref ":binop", ref ":exp"), seq(ref ":unop", ref ":exp"), lit "0", lit "1", lit "2", lit "-1", Name),
+    [":binop"] = function(state, read, push) push(binops[huff(":binop")(state, read, 4)]) end,
+    [":unop"] = union(weight(2), lit "#", lit "-", lit "not"),
+    [":table"] = seq(lit "{", arr(weight(2), terminate(seq(union(weight(2), ref ":exp", seq(lit "[", ref ":exp", lit "]", lit "=", ref ":exp"), seq(Name, lit "=", ref ":exp")), lit "}")), seq(union(weight(2), ref ":exp", seq(lit "[", ref ":exp", lit "]", lit "=", ref ":exp"), seq(Name, lit "=", ref ":exp")), lit ","), terminate(lit "}")))
 }
 
 -- deflate
@@ -315,10 +356,57 @@ local function uncompressed(output, stream)
     stream.position = position + length
 end
 
-local function decompress(data)
+local rlemap = {2, 6, 22}
+
+local function readrle(stream, len)
+    local bits = getBitsR(stream, 2)
+    if bits == 0 then return 1, getBitsR(stream, len) end
+    local rep = getBitsR(stream, bits * 2) + rlemap[bits]
+    return rep, getBitsR(stream, len)
+end
+
+local function nametree(stream, max)
+    -- read identifier code lengths
+    local maxlen = getBitsR(stream, 4)
+    if maxlen == 0 then
+        if getBitsR(stream, 1) == 0 then return nil
+        else return varint(stream) end
+    end
+    local bitlen = {}
+    local n, c = 0
+    for i = 0, max do
+        if n == 0 then
+            n, c = readrle(stream, maxlen)
+            --print(n, c)
+        end
+        if c > 0 then bitlen[#bitlen+1] = {s = i, l = c} end
+        n = n - 1
+    end
+    assert(n == 0, n)
+    table.sort(bitlen, function(a, b) if a.l == b.l then return a.s < b.s else return a.l < b.l end end)
+    bitlen[1].c = 0
+    for j = 2, #bitlen do bitlen[j].c = bit32.lshift(bitlen[j-1].c + 1, bitlen[j].l - bitlen[j-1].l) end
+    -- create tree from codes
+    local codetree = {}
+    for j = 1, #bitlen do
+        local c = bitlen[j].c
+        local node = codetree
+        for k = bitlen[j].l - 1, 1, -1 do
+            local n = bit32.extract(c, k, 1)
+            if not node[n+1] then node[n+1] = {} end
+            node = node[n+1]
+        end
+        local n = bit32.extract(c, 0, 1)
+        node[n+1] = bitlen[j].s
+    end
+    return codetree
+end
+
+local function decompress(data) return select(2, assert(xpcall(function()
     if data:sub(1, 5) ~= "\27LuzR" then error("invalid format", 2) end
+    local strtabsz = ("<I4"):unpack(data, 6)
     -- deflate string table
-    local self = {buffer = data, position = 6, bits = 0, count = 0}
+    local self = {buffer = data, position = 10, bits = 0, count = 0}
     local output, buffer = {}, {}
     local last, typ
     repeat
@@ -333,34 +421,90 @@ local function decompress(data)
     local stringtable = concat(buffer)
     if self.count % 8 > 0 then flushBits(self, self.count % 8) end
     -- read identifier list
-    local function read(n)
-        return getBitsR(self, n)
-    end
-    local numident = varint(read)
     local identifiers = {}
-    for i = 1, numident do
-        local s = ""
-        while true do
-            local n = getBitsR(self, 6)
-            if n == 63 then break end
-            s = s .. b64str:sub(n+1, n+1)
-        end
-        identifiers[i] = s
+    for ident in stringtable:sub(strtabsz + 1):gmatch "%S+" do
+        identifiers[#identifiers+1] = ident
     end
-    -- read tokens
+    -- read trees
+    local hufftrees = {}
+    hufftrees[":block"] = nametree(self, 18)
+    hufftrees[":exp"] = nametree(self, 15)
+    hufftrees[":binop"] = nametree(self, 14)
+    hufftrees[":Name"] = nametree(self, 29)
+    hufftrees[":dist"] = nametree(self, 29)
+    -- read repeats
     local p = {
         stringpos = 1,
         stringtable = stringtable,
         names = identifiers,
         namepos = 1,
-        namelist = {}
+        namelist = {},
+        trees = hufftrees
     }
+    local function preread(n) if n then return getBitsR(self, n) end end
+    local disthuff = huffcode ":dist"
+    local nrep = varint(preread)
+    local repeats = {}
+    for i = 1, nrep do
+        local offset = disthuff(p, preread)
+        local dist = disthuff(p, preread)
+        local len = disthuff(p, preread) + 4
+        repeats[i] = {offset = offset, dist = dist, len = len}
+    end
+    repeats[1].offset = repeats[1].offset + 1
+    repeats[#repeats+1] = {offset = math.huge}
+    -- read tokens
     local tokens = {}
+    local prevbits = {}
+    local curbits
+    local function read(n, flush)
+        local r
+        if repeats[1].offset == 0 then
+            --print("LZ")
+            if n then
+                if not curbits then
+                    local bits = prevbits[#prevbits-repeats[1].dist]
+                    curbits = {bits[1], bits[2]}
+                    --print(repeats[1].len, curbits[1], curbits[2])
+                    prevbits[#prevbits+1] = bits
+                end
+                --print("read", repeats[1].len, curbits[1], curbits[2])
+                r = bit32.band(bit32.rshift(curbits[1], curbits[2] - n), 2^n - 1)
+                curbits[2] = curbits[2] - n
+            end
+            if flush then
+                --print("flush", repeats[1].len, curbits[1], curbits[2])
+                assert(curbits[2] == 0, curbits[2])
+                repeats[1].len = repeats[1].len - 1
+                if repeats[1].len == 0 then table.remove(repeats, 1) end
+                curbits = nil
+            end
+        else
+            if n then
+                if not curbits then curbits = {0, 0} end
+                r = getBitsR(self, n)
+                curbits[1] = bit32.lshift(curbits[1], n) + r
+                curbits[2] = curbits[2] + n
+            end
+            if flush then
+                prevbits[#prevbits+1] = curbits
+                --print(curbits[1], curbits[2])
+                curbits = nil
+                repeats[1].offset = repeats[1].offset - 1
+            end
+        end
+        return r
+    end
+    --local file = fs.open("luz/test-out.txt", "w")
     local function push(s)
         if s == "" then return end
+        --print(">", s)
+        --file.write(s .. " ")
+        --file.flush()
         tokens[#tokens+1] = s
     end
     assert(xpcall(trees[":block"], debug.traceback, p, read, push))
+    --file.close()
     -- create source
     local retval = ""
     local lastchar, lastdot = false, false
@@ -370,6 +514,6 @@ local function decompress(data)
         lastchar, lastdot = v:match "[A-Za-z0-9_]$", v:match "%.$"
     end
     return retval
-end
+end, debug.traceback))) end
 
 return decompress

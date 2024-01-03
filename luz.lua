@@ -6,24 +6,30 @@ local decompress = require "decompress"
 local function printUsage()
     print[[Usage: luz [options] <input> [output]
 Options:
-  -c      Force compression
-  -d      Force decompression
-  -m      Minify before compression (experimental)
-  -r      Run compressed file
-  --help  Show this help
+  -c       Force compression
+  -d       Force decompression
+  -l <num> Compression level (0-9)
+  -m       Minify before compression (experimental)
+  -r       Run compressed file
+  --help   Show this help
 ]]
 end
 
 local args, input, output = {}
-local mode
+local mode, level
 local min = false
+local nextArg
 for _, arg in ipairs{...} do
-    if arg:sub(1, 2) == "--" then
+    if nextArg then
+        if nextArg == 1 then level = tonumber(arg) end
+        nextArg = nil
+    elseif arg:sub(1, 2) == "--" then
         if arg == "--help" then return printUsage() end
     elseif arg:sub(1, 1) == "-" then
         for c in arg:sub(2):gmatch(".") do
             if c == "c" then mode = 1
             elseif c == "d" then mode = 2
+            elseif c == "l" then nextArg = 1
             elseif c == "r" then mode = 3
             elseif c == "m" then min = true end
         end
@@ -56,7 +62,7 @@ else
     assert((canload and load or loadstring)(data))
     local tokens = lex(data, 2, 2)
     if min then tokens = minify(tokens) end
-    local compressed = compress(tokens, input)
+    local compressed = compress(tokens, input, level)
     file = assert(io.open(output, "wb"))
     file:write(compressed)
     file:close()

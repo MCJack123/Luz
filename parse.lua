@@ -1,31 +1,11 @@
+local number = require "number"
 local function append(tab, ext) for _, v in ipairs(ext) do tab[#tab+1] = v end return tab end
-local function round(n) if n % 1 >= 0.5 then return math.ceil(n) else return math.floor(n) end end
 
-local function varint(num)
-    local bytes = {}
-    while num > 127 do bytes[#bytes+1], num = num % 128, math.floor(num / 128) end
-    bytes[#bytes+1] = num % 128
-    local insts = {}
-    for i = #bytes, 1, -1 do insts[#insts+1] = {bytes[i] + (i == 1 and 0 or 128), 8} end
-    return insts
-end
-
-local function number(num)
-    if num % 1 == 0 then
-        local insts = {{num < 0 and 1 or 0, 2}}
-        return append(insts, varint(math.abs(num)))
-    else
-        local m, e = math.frexp(num)
-        m = round((math.abs(m) - 0.5) * 0x20000000000000)
-        if m > 0xFFFFFFFFFFFFF then e = e + 1 end
-        local insts = {{(num < 0 and 3 or 2), 2}, {e < 0 and 1 or 0, 1}}
-        e = math.abs(e)
-        local nibbles = {}
-        while e > 7 do nibbles[#nibbles+1], e = e % 8, math.floor(e / 8) end
-        nibbles[#nibbles+1] = e % 8
-        for i = #nibbles, 1, -1 do insts[#insts+1] = {nibbles[i] + (i == 1 and 0 or 8), 4} end
-        return append(insts, varint(m))
-    end
+local function distcode(i)
+    if i == 0 or i == 1 then return {code = i, extra = 0, bits = 0} end
+    local ebits = math.max(select(2, math.frexp(i)) - 2, 0)
+    local mask = 2^ebits
+    return {code = ebits * 2 + (bit32.btest(i, mask) and 3 or 2), extra = bit32.band(i, mask-1), bits = ebits}
 end
 
 ---@class (exact) State
@@ -48,7 +28,8 @@ function State.new(tokens)
         namelist = {},
         stringtable = "",
         pos = 1,
-        filename = "?"
+        filename = "?",
+        numsize = 0
     }, {__index = State})
 end
 
@@ -56,17 +37,27 @@ function State:readName()
     local tok = self:peek()
     if not (tok and tok.type == "name") then self:error("expected name near '" .. (tok and tok.text or "<eof>") .. "'") end
     local id
-    for i, v in ipairs(self.namelist) do if v == tok.text then id = i break end end
+    for i, v in ipairs(self.namelist) do if v == tok.text then id = i break elseif #tok.text == 1 and i > 512 then break end end
     if id then
         table.insert(self.namelist, 1, table.remove(self.namelist, id))
         self:next()
-        if id > 63 then return {id - 64 + 4096, 13}
-        else return {id, 7} end
+        if self.namecodetree then
+            local code = distcode(id)
+            local huff = self.namecodetree.map[code.code]
+            return {bit32.bor(bit32.lshift(huff.code, code.bits), code.extra), huff.bits + code.bits, tok.text}
+        else
+            if id > 63 then return {id - 64 + 4096, 13, tok.text}
+            else return {id, 7, tok.text} end
+        end
     else
         self.names[#self.names+1] = tok.text
         table.insert(self.namelist, 1, tok.text)
         self:next()
-        return {0, 7}
+        if self.namecodetree then
+            local code = distcode(0)
+            local huff = self.namecodetree.map[code.code]
+            return {bit32.bor(bit32.lshift(huff.code, code.bits), code.extra), huff.bits + code.bits, tok.text}
+        else return {0, 7, tok.text} end
     end
 end
 
@@ -77,7 +68,8 @@ function State:readString()
     self.stringtable = self.stringtable .. str
     self:next()
     -- TODO
-    return {#str, 8}
+    local code = distcode(#str)
+    return {bit32.bor(bit32.lshift(code.code, code.bits), code.extra), 5 + code.bits, str}
 end
 
 function State:readNumber()
@@ -86,7 +78,9 @@ function State:readNumber()
     local num = tonumber(tok.text)
     if not num then self:error("malformed number near '" .. tok.text .. "'") end
     self:next()
-    return number(num)
+    local insts = number.number(num)
+    for _, v in ipairs(insts) do self.numsize = self.numsize + v[2] end
+    return insts
 end
 
 function State:consume(type, token)
@@ -124,47 +118,47 @@ function reader.block(state)
     while true do
         --print(":block stat", state.pos)
         local tok = state:peek()
-        if not tok then insts[#insts+1] = {15, 4} return insts end
+        if not tok then insts[#insts+1] = {15, 4, "<eof>", type = ":block"} return insts end
         if tok.type == "operator" then
             if tok.text == "::" then
-                insts[#insts+1] = {2, 4}
+                insts[#insts+1] = {2, 4, "::", type = ":block"}
                 state:next()
                 insts[#insts+1] = state:readName()
                 state:consume("operator", "::")
             elseif tok.text == ";" then state:next()
-            elseif tok.text == "(" then append(insts, reader.callorassign(state, 1, 0, 4))
+            elseif tok.text == "(" then append(insts, reader.callorassign(state))
             else state:error("unexpected token '" .. tok.text .. "'") end
         elseif tok.type == "keyword" then
             if tok.text == "until" or tok.text == "end" or tok.text == "elseif" or tok.text == "else" then
-                insts[#insts+1] = {15, 4}
+                insts[#insts+1] = {15, 4, "<end>", type = ":block"}
                 return insts
             elseif tok.text == "break" then
-                insts[#insts+1] = {3, 4}
+                insts[#insts+1] = {3, 4, "break", type = ":block"}
                 state:next()
             elseif tok.text == "goto" then
-                insts[#insts+1] = {4, 4}
+                insts[#insts+1] = {4, 4, "goto", type = ":block"}
                 state:next()
                 insts[#insts+1] = state:readName()
             elseif tok.text == "do" then
-                insts[#insts+1] = {5, 4}
+                insts[#insts+1] = {5, 4, "do", type = ":block"}
                 state:next()
                 append(insts, reader.block(state))
                 state:consume("keyword", "end")
             elseif tok.text == "while" then
-                insts[#insts+1] = {6, 4}
+                insts[#insts+1] = {6, 4, "while", type = ":block"}
                 state:next()
                 append(insts, reader.exp(state))
                 state:consume("keyword", "do")
                 append(insts, reader.block(state))
                 state:consume("keyword", "end")
             elseif tok.text == "repeat" then
-                insts[#insts+1] = {7, 4}
+                insts[#insts+1] = {7, 4, "repeat", type = ":block"}
                 state:next()
                 append(insts, reader.block(state))
                 state:consume("keyword", "until")
                 append(insts, reader.exp(state))
             elseif tok.text == "if" then
-                insts[#insts+1] = {8, 4}
+                insts[#insts+1] = {8, 4, "if", type = ":block"}
                 state:next()
                 append(insts, reader.exp(state))
                 state:consume("keyword", "then")
@@ -174,19 +168,19 @@ function reader.block(state)
                     if not tok then state:error("expected 'end' near '<eof>'") end
                     if tok.type == "keyword" then
                         if tok.text == "elseif" then
-                            insts[#insts+1] = {0, 2}
+                            insts[#insts+1] = {2, 2, "elseif"}
                             state:next()
                             append(insts, reader.exp(state))
                             state:consume("keyword", "then")
                             append(insts, reader.block(state))
                         elseif tok.text == "else" then
-                            insts[#insts+1] = {1, 2}
+                            insts[#insts+1] = {3, 2, "else"}
                             state:next()
                             append(insts, reader.block(state))
                             state:consume("keyword", "end")
                             break
                         elseif tok.text == "end" then
-                            insts[#insts+1] = {2, 2}
+                            insts[#insts+1] = {0, 1, "end"}
                             state:next()
                             break
                         else state:error("expected 'end' near '" .. tok.text .. "'") end
@@ -197,7 +191,7 @@ function reader.block(state)
                 state:next() -- skip name for now
                 tok = state:peek()
                 if tok.type == "operator" and tok.text == "=" then
-                    insts[#insts+1] = {9, 4}
+                    insts[#insts+1] = {9, 4, "for (range)", type = ":block"}
                     state:back()
                     insts[#insts+1] = state:readName()
                     state:next() -- skip `=`
@@ -206,115 +200,132 @@ function reader.block(state)
                     append(insts, reader.exp(state))
                     tok = state:peek()
                     if tok and tok.type == "operator" and tok.text == "," then
-                        insts[#insts+1] = {0, 1}
+                        insts[#insts+1] = {0, 1, ","}
                         state:next()
                         append(insts, reader.exp(state))
-                    else insts[#insts+1] = {1, 1} end
+                    else insts[#insts+1] = {1, 1, "do"} end
                     state:consume("keyword", "do")
                     append(insts, reader.block(state))
                     state:consume("keyword", "end")
                 elseif (tok.type == "operator" and tok.text == ",") or (tok.type == "keyword" and tok.text == "in") then
-                    insts[#insts+1] = {10, 4}
+                    insts[#insts+1] = {10, 4, "for (iter)", type = ":block"}
                     state:back()
                     insts[#insts+1] = state:readName()
                     tok = state:peek()
                     while tok and tok.type == "operator" and tok.text == "," do
-                        insts[#insts+1] = {0, 1}
+                        insts[#insts+1] = {0, 1, ","}
                         state:next()
                         insts[#insts+1] = state:readName()
                         tok = state:peek()
                     end
-                    insts[#insts+1] = {1, 1}
+                    insts[#insts+1] = {1, 1, "in"}
                     state:consume("keyword", "in")
                     append(insts, reader.exp(state))
                     tok = state:peek()
                     while tok and tok.type == "operator" and tok.text == "," do
-                        insts[#insts+1] = {0, 1}
+                        insts[#insts+1] = {0, 1, ","}
                         state:next()
                         append(insts, reader.exp(state))
                         tok = state:peek()
                     end
-                    insts[#insts+1] = {1, 1}
+                    insts[#insts+1] = {1, 1, "do"}
                     state:consume("keyword", "do")
                     append(insts, reader.block(state))
                     state:consume("keyword", "end")
                 else state:error("expected 'in' near '" .. tok.text .. "'") end
             elseif tok.text == "function" then
-                insts[#insts+1] = {11, 4}
+                insts[#insts+1] = {11, 4, "function", type = ":block"}
+                state:next()
                 insts[#insts+1] = state:readName()
-                tok = state:peek()
                 while true do
+                    tok = state:peek()
                     if tok and tok.type == "operator" then
                         if tok.text == "." then
-                            insts[#insts+1] = {0, 2}
+                            insts[#insts+1] = {3, 2, "."}
                             state:next()
                             insts[#insts+1] = state:readName()
                         elseif tok.text == ":" then
-                            insts[#insts+1] = {1, 2}
+                            insts[#insts+1] = {2, 2, ":"}
                             state:next()
                             insts[#insts+1] = state:readName()
                             break
-                        end
-                    else
-                        insts[#insts+1] = {2, 2}
-                        break
-                    end
+                        elseif tok.text == "(" then
+                            insts[#insts+1] = {0, 1, "("}
+                            break
+                        else state:error("expected '(' near '" .. tok.text .. "'") end
+                    else state:error("expected '(' near '" .. tok.text .. "'") end
                 end
                 append(insts, reader.funcbody(state))
             elseif tok.text == "local" then
                 state:next()
                 tok = state:peek()
                 if tok and tok.type == "keyword" and tok.text == "function" then
-                    insts[#insts+1] = {12, 4}
+                    insts[#insts+1] = {12, 4, "local function", type = ":block"}
                     state:next()
                     insts[#insts+1] = state:readName()
                     append(insts, reader.funcbody(state))
                 else
-                    insts[#insts+1] = {13, 4}
+                    insts[#insts+1] = {13, 4, "local", type = ":block"}
+                    local start = #insts
+                    local local1 = true
                     insts[#insts+1] = state:readName()
                     tok = state:peek()
                     while tok and tok.type == "operator" and tok.text == "," do
-                        insts[#insts+1] = {0, 1}
+                        insts[#insts+1] = {2, 2, ","}
+                        local1 = false
                         state:next()
                         insts[#insts+1] = state:readName()
                         tok = state:peek()
                     end
-                    insts[#insts+1] = {1, 1}
                     tok = state:peek()
                     if tok and tok.type == "operator" and tok.text == "=" then
-                        insts[#insts+1] = {0, 1}
+                        insts[#insts+1] = {0, 1, "="}
                         state:next()
                         append(insts, reader.exp(state))
                         tok = state:peek()
                         while tok and tok.type == "operator" and tok.text == "," do
-                            insts[#insts+1] = {0, 1}
+                            insts[#insts+1] = {0, 1, ","}
+                            local1 = false
                             state:next()
                             append(insts, reader.exp(state))
                             tok = state:peek()
                         end
-                        insts[#insts+1] = {1, 1}
-                    else insts[#insts+1] = {1, 1} end
+                        insts[#insts+1] = {1, 1, "<done>"}
+                    else insts[#insts+1] = {3, 2, "<done>"} local1 = false end
+                    if local1 then
+                        insts[start] = {17, 4, "local1", type = ":block"}
+                        table.remove(insts, start + 2)
+                        insts[#insts] = nil
+                    end
                 end
             elseif tok.text == "return" then
-                insts[#insts+1] = {14, 4}
+                insts[#insts+1] = {14, 4, "return", type = ":block"}
                 state:next()
                 tok = state:peek()
                 if not tok or (tok.type == "keyword" and (tok.text == "until" or tok.text == "end" or tok.text == "elseif" or tok.text == "else")) then
-                    insts[#insts+1] = {1, 1}
+                    insts[#insts+1] = {1, 1, "<done>"}
                 else
-                    insts[#insts+1] = {0, 1}
+                    local start = #insts
+                    local return1 = true
+                    insts[#insts+1] = {0, 1, "(values)"}
                     append(insts, reader.exp(state))
                     tok = state:peek()
                     while tok and tok.type == "operator" and tok.text == "," do
-                        insts[#insts+1] = {0, 1}
+                        insts[#insts+1] = {0, 1, ","}
+                        return1 = false
                         state:next()
                         append(insts, reader.exp(state))
                         tok = state:peek()
                     end
-                    insts[#insts+1] = {1, 1}
+                    if return1 and tok.type == "keyword" and (tok.text == "until" or tok.text == "end" or tok.text == "elseif" or tok.text == "else") then
+                        insts[start][1] = 18
+                        table.remove(insts, start+1)
+                        return insts
+                    end
+                    insts[#insts+1] = {1, 1, "<done>"}
                 end
             else state:error("unexpected token '" .. tok.text .. "'") end
-        elseif tok.type == "name" then append(insts, reader.callorassign(state, 1, 0, 4))
+        elseif tok.type == "name" then append(insts, reader.callorassign(state))
         else state:error("unexpected token '" .. tok.text .. "'") end
     end
 end
@@ -322,7 +333,7 @@ end
 ---@param state State
 ---@return table
 ---@nodiscard
-function reader.callorassign(state, callopt, assignopt, bits)
+function reader.callorassign(state)
     --print(":callorassign", state.pos)
     local count = 0
     local function next()
@@ -392,13 +403,19 @@ function reader.callorassign(state, callopt, assignopt, bits)
     for _ = 1, count do state:back() end
     local insts = {}
     if iscall then
-        if callopt then insts[#insts+1] = {callopt, bits} end
+        insts[#insts+1] = {1, 4, ":call", type = ":block"}
         append(insts, reader.call(state))
         --print(":callorassign done", state.pos)
         return insts
     else
-        if assignopt then insts[#insts+1] = {assignopt, bits} end
-        append(insts, reader.assign(state))
+        local i, i1 = reader.assign(state)
+        if i1 then
+            insts[#insts+1] = {16, 4, ":assign1", type = ":block"}
+            append(insts, i1)
+        else
+            insts[#insts+1] = {0, 4, ":assign", type = ":block"}
+            append(insts, i)
+        end
         return insts
     end
 end
@@ -407,107 +424,68 @@ end
 ---@return table
 ---@nodiscard
 function reader.call(state)
-    --print(":call", state.pos)
-    local insts, isprefix = reader.var(state, true) -- this processes the entire call
-    if not isprefix then state:error("expected '(' near '" .. (state:peek() or {text = "<eof>"}).text .. "'") end
-    table.remove(insts, 1) -- remove prefixexp wrapper
-    --print(":call done", state.pos)
-    return insts
+    return reader.prefixexp(state)
 end
 
 ---@param state State
 ---@return table
+---@return table|nil
 ---@nodiscard
 function reader.assign(state)
     --print(":assign", state.pos)
     local insts = reader.var(state)
+    local insts1 = {}
+    for i, v in ipairs(insts) do insts1[i] = v end
     local tok = state:peek()
     while tok and tok.type == "operator" and tok.text == "," do
-        insts[#insts+1] = {0, 1}
+        insts[#insts+1] = {0, 1, ","}
+        insts1 = nil
         state:next()
         append(insts, reader.var(state))
         tok = state:peek()
     end
-    insts[#insts+1] = {1, 1}
+    insts[#insts+1] = {1, 1, "="}
     state:consume("operator", "=")
-    append(insts, reader.exp(state))
+    local exp = reader.exp(state)
+    append(insts, exp)
+    if insts1 then append(insts1, exp) end
     tok = state:peek()
     while tok and tok.type == "operator" and tok.text == "," do
-        insts[#insts+1] = {0, 1}
+        insts[#insts+1] = {0, 1, ","}
+        insts1 = nil
         state:next()
         append(insts, reader.exp(state))
         tok = state:peek()
     end
-    insts[#insts+1] = {1, 1}
-    return insts
+    insts[#insts+1] = {1, 1, "<done>"}
+    return insts, insts1
 end
 
 ---@param state State
 ---@return table
----@return boolean
 ---@nodiscard
-function reader.var(state, allowPrefix)
+function reader.var(state)
     --print(":var", state.pos)
-    local tok = state:peek()
-    local insts = {}
-    local lastprefix = false
-    if tok and tok.type == "operator" and tok.text == "(" then
-        -- starts with a prefixexp
-        state:next()
-        insts = reader.exp(state)
-        table.insert(insts, 1, {2, 2})
-        state:consume("operator", ")")
-        lastprefix = true
-    elseif tok and tok.type == "name" then
-        insts = {{0, 2}, state:readName()}
-    else state:error("expected name near '" .. (tok and tok.text or "<eof>") .. "'") end
+    local insts = {state:readName()}
     while true do
-        tok = state:peek()
+        local tok = state:peek()
         if tok and tok.type == "operator" then
             if tok.text == "." then
                 state:next()
-                if not lastprefix then table.insert(insts, 1, {0, 2}) end -- :prefixexp(:var)
-                table.insert(insts, 1, {2, 2}) -- :var(:prefixexp . :Name)
+                insts[#insts+1] = {3, 2, "."}
                 insts[#insts+1] = state:readName()
-                lastprefix = false
             elseif tok.text == "[" then
                 state:next()
-                if not lastprefix then table.insert(insts, 1, {0, 2}) end -- :prefixexp(:var)
-                table.insert(insts, 1, {1, 2}) -- :var(:prefixexp [ :exp ])
+                insts[#insts+1] = {2, 2, "["}
                 append(insts, reader.exp(state))
                 state:consume("operator", "]")
-                lastprefix = false
-            elseif tok.text == "(" or tok.text == "{" then
-                local newinsts = reader.args(state)
-                if not lastprefix then table.insert(insts, 1, {0, 2}) end -- :prefixexp(:var)
-                table.insert(insts, 1, {0, 1}) -- :call(:prefixexp :args)
-                table.insert(insts, 1, {1, 2}) -- :prefixexp(:call)
-                append(insts, newinsts)
-                lastprefix = true
-            elseif tok.text == ":" then
-                state:next()
-                local name = state:readName()
-                local newinsts = reader.args(state)
-                if not lastprefix then table.insert(insts, 1, {0, 2}) end -- :prefixexp(:var)
-                table.insert(insts, 1, {1, 1}) -- :call(:prefixexp : :Name :args)
-                table.insert(insts, 1, {1, 2}) -- :prefixexp(:call)
-                insts[#insts+1] = name
-                append(insts, newinsts)
-                lastprefix = true
             else
-                if lastprefix and not allowPrefix then state:error("syntax error near '" .. tok.text .. "'") end
-                return insts, lastprefix
+                insts[#insts+1] = {0, 1, "<done>"}
+                return insts
             end
-        elseif tok and tok.type == "string" then
-            local newinsts = reader.args(state)
-            if not lastprefix then table.insert(insts, 1, {0, 2}) end -- :prefixexp(:var)
-            table.insert(insts, 1, {0, 1}) -- :call(:prefixexp :args)
-            table.insert(insts, 1, {1, 2}) -- :prefixexp(:call)
-            append(insts, newinsts)
-            lastprefix = true
         else
-            if lastprefix and not allowPrefix then state:error("syntax error near '" .. (tok and tok.text or "<eof>") .. "'") end
-            return insts, lastprefix
+            insts[#insts+1] = {0, 1, "<done>"}
+            return insts
         end
     end
 end
@@ -519,31 +497,31 @@ function reader.args(state)
     --print(":args", state.pos)
     local tok = state:peek()
     if tok and tok.type == "string" then
-        return {{2, 2}, state:readString()}
+        return {{3, 2, ":args :String"}, state:readString()}
     elseif tok and tok.type == "operator" then
         if tok.text == "{" then
             local insts = reader.table(state)
-            table.insert(insts, 1, {1, 2})
+            table.insert(insts, 1, {2, 2, ":args {"})
             return insts
         elseif tok.text == "(" then
-            local insts = {{0, 2}}
+            local insts = {{0, 1, ":args"}}
             state:next()
             tok = state:peek()
             if tok and tok.type == "operator" and tok.text == ")" then
-                insts[2] = {1, 1}
+                insts[2] = {1, 1, "()"}
                 state:next()
                 return insts
             end
-            insts[2] = {0, 1}
+            insts[2] = {0, 1, "("}
             append(insts, reader.exp(state))
             tok = state:peek()
             while tok and tok.type == "operator" and tok.text == "," do
-                insts[#insts+1] = {0, 1}
+                insts[#insts+1] = {0, 1, ","}
                 state:next()
                 append(insts, reader.exp(state))
                 tok = state:peek()
             end
-            insts[#insts+1] = {1, 1}
+            insts[#insts+1] = {1, 1, ")"}
             state:consume("operator", ")")
             --print(":args done", state.pos)
             return insts
@@ -555,10 +533,50 @@ end
 ---@return table
 ---@nodiscard
 function reader.prefixexp(state)
-    --print(":prefixexp", state.pos)
-    local insts, isprefix = reader.var(state, true) -- this processes everything
-    if not isprefix then table.insert(insts, 1, {0, 2}) end
-    return insts
+    --print(":var", state.pos)
+    local tok = state:peek()
+    local insts
+    if tok and tok.type == "operator" and tok.text == "(" then
+        state:next()
+        insts = reader.exp(state)
+        table.insert(insts, 1, {1, 1, "(:exp)"})
+        state:consume("operator", ")")
+    elseif tok and tok.type == "name" then
+        insts = {{0, 1, ":Name"}, state:readName()}
+    else state:error("expected name near '" .. (tok and tok.text or "<eof>") .. "'") end
+    while true do
+        tok = state:peek()
+        if tok and tok.type == "operator" then
+            if tok.text == "." then
+                state:next()
+                insts[#insts+1] = {6, 3, "."}
+                insts[#insts+1] = state:readName()
+            elseif tok.text == "[" then
+                state:next()
+                insts[#insts+1] = {14, 4, "["}
+                append(insts, reader.exp(state))
+                state:consume("operator", "]")
+                if insts[#insts][3] == "<done>" then insts[#insts][3] = "]" end
+            elseif tok.text == "(" or tok.text == "{" then
+                insts[#insts+1] = {2, 2, "("}
+                append(insts, reader.args(state))
+            elseif tok.text == ":" then
+                state:next()
+                insts[#insts+1] = {15, 4, ":"}
+                insts[#insts+1] = state:readName()
+                append(insts, reader.args(state))
+            else
+                insts[#insts+1] = {0, 1, "<done>"}
+                return insts
+            end
+        elseif tok and tok.type == "string" then
+            insts[#insts+1] = {2, 2, "("}
+            append(insts, reader.args(state))
+        else
+            insts[#insts+1] = {0, 1, "<done>"}
+            return insts
+        end
+    end
 end
 
 local binop = {
@@ -588,48 +606,56 @@ function reader.exp(state)
     local tok = state:peek()
     if tok then
         if tok.type == "constant" then
-            if tok.text == "nil" then insts = {{0, 4}}
-            elseif tok.text == "false" then insts = {{1, 4}}
-            elseif tok.text == "true" then insts = {{2, 4}}
-            elseif tok.text == "..." then insts = {{5, 4}} end
+            if tok.text == "nil" then insts = {{0, 4, "nil", type = ":exp"}}
+            elseif tok.text == "false" then insts = {{1, 4, "false", type = ":exp"}}
+            elseif tok.text == "true" then insts = {{2, 4, "true", type = ":exp"}}
+            elseif tok.text == "..." then insts = {{5, 4, "...", type = ":exp"}} end
             state:next()
-        elseif tok.type == "number" then insts = append({{3, 4}}, state:readNumber())
-        elseif tok.type == "string" then insts = {{4, 4}, state:readString()}
+        elseif tok.type == "number" then
+            local num = tonumber(tok.text)
+            if num == 0 then insts = {{11, 4, "0", type = ":exp"}} state:next()
+            elseif num == 1 then insts = {{12, 4, "1", type = ":exp"}} state:next()
+            elseif num == 2 then insts = {{13, 4, "2", type = ":exp"}} state:next()
+            elseif num == -1 then insts = {{14, 4, "-1", type = ":exp"}} state:next()
+            else insts = append({{3, 4, ":Number", type = ":exp"}}, state:readNumber()) end
+        elseif tok.type == "string" then insts = {{4, 4, ":String", type = ":exp"}, state:readString()}
         elseif tok.type == "keyword" then
             if tok.text == "function" then
                 state:next()
                 insts = reader.funcbody(state)
-                table.insert(insts, 1, {6, 4})
+                table.insert(insts, 1, {6, 4, "function()", type = ":exp"})
             else state:error("unexpected '" .. tok.text .. "'") end
         elseif tok.type == "operator" then
             if tok.text == "(" then
                 insts = reader.prefixexp(state)
-                table.insert(insts, 1, {7, 4})
+                table.insert(insts, 1, {7, 4, "(", type = ":exp"})
             elseif tok.text == "{" then
                 insts = reader.table(state)
-                table.insert(insts, 1, {8, 4})
+                table.insert(insts, 1, {8, 4, "{", type = ":exp"})
             elseif tok.text == "-" then
-                insts = {{10, 4}, {0, 2}}
+                insts = {{10, 4, ":unop", type = ":exp"}, {2, 2, "-"}}
                 state:next()
                 append(insts, reader.exp(state))
             elseif tok.text == "not" then
-                insts = {{10, 4}, {1, 2}}
+                insts = {{10, 4, ":unop", type = ":exp"}, {3, 2, "not"}}
                 state:next()
                 append(insts, reader.exp(state))
             elseif tok.text == "#" then
-                insts = {{10, 4}, {2, 2}}
+                insts = {{10, 4, ":unop", type = ":exp"}, {0, 1, "#"}}
                 state:next()
                 append(insts, reader.exp(state))
             else state:error("unexpected '" .. tok.text .. "'") end
         elseif tok.type == "name" then
             insts = reader.prefixexp(state)
-            table.insert(insts, 1, {7, 4})
+            if #insts == 3 and insts[1][1] == 0 and insts[1][2] == 1 and insts[3][1] == 0 and insts[3][2] == 1 then
+                insts = {{15, 4, ":Name", type = ":exp"}, insts[2]}
+            else table.insert(insts, 1, {7, 4, ":prefixexp", type = ":exp"}) end
         else state:error("expected expression near '" .. tok.text .. "'") end
     else state:error("expected expression near '<eof>'") end
     tok = state:peek()
     if tok and (tok.type == "operator" or tok.type == "keyword") and binop[tok.text] then
-        table.insert(insts, 1, {9, 4})
-        insts[#insts+1] = {binop[tok.text], 4}
+        table.insert(insts, 1, {9, 4, ":binop", type = ":exp"})
+        insts[#insts+1] = {binop[tok.text], 4, tok.text, type = ":binop"}
         state:next()
         append(insts, reader.exp(state))
     end
@@ -643,14 +669,14 @@ function reader.funcbody(state)
     state:consume("operator", "(")
     local tok = state:peek()
     if tok and tok.type == "operator" and tok.text == ")" then
-        insts[#insts+1] = {0, 2}
+        insts[#insts+1] = {2, 2, "()"}
         state:next()
     elseif tok and tok.type == "constant" and tok.text == "..." then
-        insts[#insts+1] = {1, 2}
+        insts[#insts+1] = {3, 2, "(...)"}
         state:next()
         state:consume("operator", ")")
     else
-        insts[#insts+1] = {2, 2}
+        insts[#insts+1] = {0, 1, "("}
         insts[#insts+1] = state:readName()
         tok = state:peek()
         local vararg = false
@@ -658,19 +684,19 @@ function reader.funcbody(state)
             state:next()
             tok = state:peek()
             if tok and tok.type == "constant" and tok.text == "..." then
-                insts[#insts+1] = {1, 1}
-                insts[#insts+1] = {0, 1}
+                insts[#insts+1] = {1, 1, ","}
+                insts[#insts+1] = {0, 1, "...)"}
                 state:next()
                 vararg = true
                 break
             end
-            insts[#insts+1] = {0, 1}
+            insts[#insts+1] = {0, 1, ","}
             insts[#insts+1] = state:readName()
             tok = state:peek()
         end
         if not vararg then
-            insts[#insts+1] = {1, 1}
-            insts[#insts+1] = {1, 1}
+            insts[#insts+1] = {1, 1, ""}
+            insts[#insts+1] = {1, 1, ")"}
         end
         state:consume("operator", ")")
     end
@@ -685,23 +711,23 @@ function reader.table(state)
     state:consume("operator", "{")
     while true do
         local tok = state:peek()
-        insts[#insts+1] = {0, 2}
+        insts[#insts+1] = {2, 2, ","}
         local pos = #insts
         if tok then
             if tok.type == "operator" then
                 if tok.text == "[" then
-                    insts[#insts+1] = {0, 2}
+                    insts[#insts+1] = {2, 2, "[] ="}
                     state:next()
                     append(insts, reader.exp(state))
                     state:consume("operator", "]")
                     state:consume("operator", "=")
                     append(insts, reader.exp(state))
                 elseif tok.text == "}" then
-                    insts[pos] = {2, 2}
+                    insts[pos] = {3, 2, "}"}
                     state:next()
                     return insts
                 else
-                    insts[#insts+1] = {2, 2}
+                    insts[#insts+1] = {0, 1, ":exp"}
                     append(insts, reader.exp(state))
                 end
             elseif tok.type == "name" then
@@ -709,23 +735,23 @@ function reader.table(state)
                 tok = state:peek()
                 if tok and tok.type == "operator" and tok.text == "=" then
                     state:back()
-                    insts[#insts+1] = {1, 2}
+                    insts[#insts+1] = {3, 2, "="}
                     insts[#insts+1] = state:readName()
                     state:next()
                     append(insts, reader.exp(state))
                 else
                     state:back()
-                    insts[#insts+1] = {2, 2}
+                    insts[#insts+1] = {0, 1, ":exp"}
                     append(insts, reader.exp(state))
                 end
             else
-                insts[#insts+1] = {2, 2}
+                insts[#insts+1] = {0, 1, ":exp"}
                 append(insts, reader.exp(state))
             end
         else state:error("expected '}' near '<eof>'") end
         tok = state:peek()
         if tok and tok.type == "operator" and tok.text == "}" then
-            insts[pos][1] = 1
+            insts[pos] = {0, 1, "...}"}
             state:next()
             return insts
         elseif tok and tok.type == "operator" and (tok.text == "," or tok.text == ";") then
@@ -734,13 +760,15 @@ function reader.table(state)
     end
 end
 
-return function(tokens, filename)
+return function(tokens, filename, namecodetree)
     local state = State.new(tokens)
     state.filename = filename or state.filename
+    state.namecodetree = namecodetree
     local insts = reader.block(state)
     if state:peek() then state:error("expected '<eof>' near '" .. state:peek().text .. "'") end
     local size = 0
     for _, v in ipairs(insts) do size = size + v[2] end
+    print("numsize", state.numsize / 8)
     return {
         bits = insts,
         size = size,

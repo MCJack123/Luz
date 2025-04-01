@@ -130,7 +130,7 @@ local function compress(tokens, level)
     if dist.map then
         dist.maxlen = 0
         for _, w in ipairs(dist.lengths) do dist.maxlen = math.max(dist.maxlen, w) end
-    elseif dist.map == false then dist = {idx = dist.lengths} end
+    elseif dist.map == false then dist = {idx = dist.lengths, map = {[distlist[dist.lengths][1]] = {code = 0, bits = 0, extra = 0}}} end
     -- generate string table and prepare identifier list
     for i, v in ipairs(tokens) do
         if v.type == "name" and not token_encode_map[v.text] then
